@@ -1,6 +1,6 @@
-# DuckCLI
+# OpenDuck
 
-**DuckCLI** is a lightweight, high-performance Terminal User Interface (TUI) for **DuckDB**, built with Python and the Textual framework. It allows you to navigate, preview, and query data files (Parquet, CSV, SQLite, JSON, Excel) instantly without leaving your terminal.
+**OpenDuck** is a lightweight, high-performance Terminal User Interface (TUI) for **DuckDB**, built with Python and the Textual framework. It allows you to navigate, preview, and query data files (Parquet, CSV, SQLite, JSON, Excel) instantly without leaving your terminal.
 
 <img width="2378" height="818" alt="image" src="https://github.com/user-attachments/assets/92d6c9ae-2055-49b1-bb72-c000832a5661" />
 
