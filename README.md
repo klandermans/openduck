@@ -1,6 +1,7 @@
 # DuckCLI
 
 A lightweight, high-performance TUI (Terminal User Interface) for **DuckDB**, built with Python and Textual. Navigate, preview, and query data files (Parquet, CSV, SQLite, JSON, Excel) directly from your terminal.
+<img width="2378" height="818" alt="image" src="https://github.com/user-attachments/assets/92d6c9ae-2055-49b1-bb72-c000832a5661" />
 
 ## Features
 
