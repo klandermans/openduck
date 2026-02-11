@@ -187,20 +187,57 @@ class MatrixScreen(ModalScreen):
             self._timer.stop()
         self.dismiss()
 
+LOGO_RAW = (
+    "   ___                       _            _    \n"
+    "  / _ \\ _ __   ___ _ __   __| |_   _  ___| | __\n"
+    " | | | | '_ \\ / _ \\ '_ \\ / _` | | | |/ __| |/ /\n"
+    " | |_| | |_) |  __/ | | | (_| | |_| | (__|   < \n"
+    "  \\___/| .__/ \\___|_| |_|\\__,_|\\__,_|\\___|_|\\_\\\n"
+    "       |_|                                     "
+)
+
+LOLCAT_COLORS = [
+    "#ff0000", "#ff4400", "#ff8800", "#ffcc00", "#ffff00", "#88ff00",
+    "#00ff00", "#00ff88", "#00ffff", "#0088ff", "#0000ff", "#4400ff",
+    "#8800ff", "#cc00ff", "#ff00ff", "#ff0088",
+]
+
+def lolcat(text: str) -> str:
+    """Apply rainbow colors to text, Rich markup style."""
+    from rich.text import Text
+    rich_text = Text(text)
+    lines = text.split("\n")
+    pos = 0
+    for row, line in enumerate(lines):
+        for col, ch in enumerate(line):
+            if ch != " ":
+                color = LOLCAT_COLORS[(col + row * 3) % len(LOLCAT_COLORS)]
+                rich_text.stylize(color, pos, pos + 1)
+            pos += 1
+        pos += 1  # newline
+    return rich_text
+
+DUCK_ART = r"""                  (o.                   H
+      _o)         |  . :             (o]H
+  \\\__/      \\\_|  : :.        \\\_\  H
+  <____).....<_____).:.::.......<_____).H"""
+
 class AboutScreen(ModalScreen):
     DEFAULT_CSS = """
     #easter-egg { color: $text-disabled; }
+    #duck-art { color: $accent; }
     """
     def compose(self) -> ComposeResult:
         with Middle():
             with Vertical(id="about-inner"):
-                yield Static("[b]OpenDuck CLI[/b]", id="about-title")
-                yield Static("----------------------------------------")
+                yield Static(lolcat(LOGO_RAW), id="about-title")
+                yield Static("────────────────────────────────────────────────────")
                 yield Static("[b]GitHub:[/b] github.com/bertatron/duckcli")
                 yield Static("[b]Author:[/b] Bertatron")
                 yield Static("[b]License:[/b] MIT")
                 yield Static("\nKISS - Metadata & Async enabled.")
                 yield Static("Don't click here", id="easter-egg")
+                yield Static(DUCK_ART, id="duck-art")
                 yield Static("\n[Press any key to close]", id="about-footer")
 
     def on_key(self) -> None: self.dismiss()
@@ -447,7 +484,7 @@ class DuckCLI(App):
     #filter-input { margin-bottom: 1; }
     Button { margin: 0 1; min-width: 10; }
     AboutScreen { align: center middle; background: rgba(0, 0, 0, 0.7); }
-    #about-inner { width: 60; height: auto; background: $surface; border: tall $primary; padding: 2 4; }
+    #about-inner { width: 64; height: auto; background: $surface; border: tall $primary; padding: 2 4; }
     #about-title { text-align: center; color: $accent; }
     #about-footer { text-align: center; color: $text-disabled; }
     #save-dialog { width: 50; height: auto; background: $surface; border: tall $primary; padding: 2; }
