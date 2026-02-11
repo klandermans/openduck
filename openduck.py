@@ -320,24 +320,30 @@ class DuckTree(DirectoryTree):
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
         return [p for p in paths if p.is_dir() or is_duckdb_file(p)]
 
-class DatabaseTree(Tree):
-    """Tree widget showing database connections and their tables."""
+class DatabaseTree(Vertical):
+    """Tree widget showing database connections and their tables with search functionality."""
 
     def __init__(self):
-        super().__init__("Databases", id="db-tree")
+        super().__init__(id="db-tree")
         self.connections_data = {}
-
+        self.original_tree = Tree("Databases", id="db-tree-inner")
+        self.search_input = Input(placeholder="Search tables...", id="db-search-input")
+        
+    def compose(self) -> ComposeResult:
+        yield self.search_input
+        yield self.original_tree
+        
     def on_mount(self):
-        self.root.expand()
+        self.original_tree.root.expand()
         self._ensure_add_node()
-
+        
     def _ensure_add_node(self):
         """Make sure the '+ Add connection' node is always the last leaf."""
         # Remove existing add-node if present
-        for child in list(self.root.children):
+        for child in list(self.original_tree.root.children):
             if child.data and child.data.get("type") == "add_connection":
                 child.remove()
-        self.root.add_leaf("+ Add connection", data={"type": "add_connection"})
+        self.original_tree.root.add_leaf("+ Add connection", data={"type": "add_connection"})
 
     def add_connection_node(self, conn_info: dict, tables: list = None):
         conn_id = conn_info["id"]
@@ -345,7 +351,7 @@ class DatabaseTree(Tree):
         label = f"{type_icon} {conn_info['display_name']}"
         self.remove_connection_node(conn_id)
         self.connections_data[conn_id] = conn_info
-        conn_node = self.root.add(
+        conn_node = self.original_tree.root.add(
             label,
             data={"type": "connection", "conn_id": conn_id},
             expand=True,
@@ -361,12 +367,56 @@ class DatabaseTree(Tree):
         self._ensure_add_node()
 
     def remove_connection_node(self, conn_id: str):
-        for child in list(self.root.children):
+        for child in list(self.original_tree.root.children):
             if child.data and child.data.get("conn_id") == conn_id:
                 child.remove()
                 break
         self.connections_data.pop(conn_id, None)
         self._ensure_add_node()
+
+    def filter_tables(self, search_term: str):
+        """Filter the tree to show only tables that match the search term."""
+        search_term = search_term.strip().lower()
+
+        # Clear the tree and rebuild with filtered content
+        self.original_tree.clear()
+
+        for conn_id, conn_info in self.connections_data.items():
+            type_icon = "\U0001f42c" if conn_info["type"] == "mysql" else "\U0001f537"
+            label = f"{type_icon} {conn_info['display_name']}"
+
+            # Filter tables based on search term (case insensitive)
+            all_tables = conn_info.get("tables", [])
+            if search_term:
+                # Case-insensitive search
+                filtered_tables = [table for table in all_tables if search_term in table.lower()]
+            else:
+                # Show all tables when search is empty
+                filtered_tables = all_tables
+
+            # Always add the connection node, but with filtered tables
+            conn_node = self.original_tree.root.add(
+                label,
+                data={"type": "connection", "conn_id": conn_id},
+                expand=True,
+            )
+            
+            # Add tables based on filtering
+            for table_name in sorted(filtered_tables):
+                conn_node.add_leaf(
+                    f"  {table_name}",
+                    data={"type": "table", "conn_id": conn_id, "table": table_name, "database": conn_info["database"]},
+                )
+            
+            # If search term exists but no tables match, add a "No matches" indicator
+            if search_term and not filtered_tables:
+                conn_node.add_leaf(
+                    "  No matching tables",
+                    data={"type": "no_match", "conn_id": conn_id},
+                )
+
+        self._ensure_add_node()
+        self.original_tree.root.expand()
 
     def update_tables(self, conn_id: str, tables: list):
         conn_info = self.connections_data.get(conn_id)
@@ -611,9 +661,9 @@ class DuckCLI(App):
     #sidebar { width: 30; background: $surface; }
     #main-content { width: 1fr; }
     #saved-queries-tree, #history-tree { height: auto; max-height: 30%; }
-    TabbedContent { width: 100%; }
-    TextArea { height: 35%; border-bottom: tall $primary; }
-    DataTable { height: 60%; }
+    TabbedContent { width: 100%; height: 100%; }
+    TextArea { height: 25%; border-bottom: tall $primary; }
+    DataTable { height: 1fr; }
     #export-sidebar { width: auto; margin-left: 1; width: 8; background: $panel; border: round $primary; padding: 0; }
     .export-btn { margin: 0; padding: 0; height: 2; width: 100%; }
     #metadata-bar {
@@ -637,6 +687,8 @@ class DuckCLI(App):
     #export-modal-title { text-style: bold; margin-bottom: 1; text-align: center; }
     #export-filename { margin-bottom: 1; }
     #db-tree { height: auto; max-height: 40%; }
+    #db-search-input { margin-bottom: 1; }
+    #db-tree-inner { height: 1fr; }
     #conn-dialog { width: 60; height: auto; background: $surface; border: tall $primary; padding: 2; }
     #conn-dialog-title { text-style: bold; margin-bottom: 1; text-align: center; }
     #conn-status { height: 1; margin-top: 1; }
@@ -660,7 +712,6 @@ class DuckCLI(App):
     def compose(self) -> ComposeResult:
         with Horizontal():
             with Vertical(id="sidebar"):
-                yield Static("Explorer", id="explorer-header")
                 yield DuckTree(CWD, id="files")
                 yield DatabaseTree()
                 yield Tree("Saved Queries", id="saved-queries-tree")
@@ -1045,6 +1096,22 @@ class DuckCLI(App):
                 tbl = tab.query_one(DataTable)
                 tbl.loading = False
         
+        elif event.button.id == "close-tab":
+            # Close the current tab
+            tabs = self.query_one("#tabs", TabbedContent)
+            if tabs.active:
+                tabs.remove_pane(tabs.active)
+    
+    def on_input_changed(self, event: Input.Changed):
+        """Handle search input changes for database tables"""
+        if event.input.id == "db-search-input":
+            # Find the database tree and filter tables
+            try:
+                db_tree = self.query_one("#db-tree", DatabaseTree)
+                db_tree.filter_tables(event.value)
+            except:
+                # If the element doesn't exist yet, ignore
+                pass
 
 if __name__ == "__main__":
     DuckCLI().run()
