@@ -12,7 +12,8 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, Middle, ScrollableContainer
 from textual.widgets import (
     Header, Footer, TextArea, DataTable, DirectoryTree,
-    Static, Input, Button, TabbedContent, TabPane, ListView, ListItem, Label
+    Static, Input, Button, TabbedContent, TabPane, ListView, ListItem, Label,
+    Tree, Select
 )
 from textual.events import MouseEvent, Click, MouseDown, MouseMove, MouseUp
 from textual.screen import ModalScreen
@@ -53,12 +54,15 @@ def load_config():
     """Load config from openduck.json, create if doesn't exist"""
     if CONFIG_FILE.exists():
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            config = json.load(f)
+            if "connections" not in config:
+                config["connections"] = []
+            return config
     else:
-        # Create default config
         default_config = {
             "history": [],
-            "saved_queries": []
+            "saved_queries": [],
+            "connections": []
         }
         save_config(default_config)
         return default_config
@@ -100,6 +104,25 @@ def save_query(name: str, sql: str):
         "sql": sql.strip(),
         "timestamp": timestamp
     })
+    save_config(config)
+    return config
+
+def save_connection(conn_info: dict):
+    """Save a database connection to config"""
+    config = load_config()
+    for i, c in enumerate(config["connections"]):
+        if c["id"] == conn_info["id"]:
+            config["connections"][i] = conn_info
+            save_config(config)
+            return config
+    config["connections"].append(conn_info)
+    save_config(config)
+    return config
+
+def delete_connection(conn_id: str):
+    """Delete a database connection from config"""
+    config = load_config()
+    config["connections"] = [c for c in config["connections"] if c["id"] != conn_id]
     save_config(config)
     return config
 
@@ -297,6 +320,59 @@ class DuckTree(DirectoryTree):
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
         return [p for p in paths if p.is_dir() or is_duckdb_file(p)]
 
+class DatabaseTree(Tree):
+    """Tree widget showing database connections and their tables."""
+
+    def __init__(self):
+        super().__init__("Databases", id="db-tree")
+        self.connections_data = {}
+
+    def on_mount(self):
+        self.root.expand()
+        self._ensure_add_node()
+
+    def _ensure_add_node(self):
+        """Make sure the '+ Add connection' node is always the last leaf."""
+        # Remove existing add-node if present
+        for child in list(self.root.children):
+            if child.data and child.data.get("type") == "add_connection":
+                child.remove()
+        self.root.add_leaf("+ Add connection", data={"type": "add_connection"})
+
+    def add_connection_node(self, conn_info: dict, tables: list = None):
+        conn_id = conn_info["id"]
+        type_icon = "\U0001f42c" if conn_info["type"] == "mysql" else "\U0001f537"
+        label = f"{type_icon} {conn_info['display_name']}"
+        self.remove_connection_node(conn_id)
+        self.connections_data[conn_id] = conn_info
+        conn_node = self.root.add(
+            label,
+            data={"type": "connection", "conn_id": conn_id},
+            expand=True,
+        )
+        if tables:
+            for table_name in sorted(tables):
+                conn_node.add_leaf(
+                    f"  {table_name}",
+                    data={"type": "table", "conn_id": conn_id, "table": table_name, "database": conn_info["database"]},
+                )
+        else:
+            conn_node.add_leaf("Loading...", data={"type": "loading", "conn_id": conn_id})
+        self._ensure_add_node()
+
+    def remove_connection_node(self, conn_id: str):
+        for child in list(self.root.children):
+            if child.data and child.data.get("conn_id") == conn_id:
+                child.remove()
+                break
+        self.connections_data.pop(conn_id, None)
+        self._ensure_add_node()
+
+    def update_tables(self, conn_id: str, tables: list):
+        conn_info = self.connections_data.get(conn_id)
+        if conn_info:
+            self.add_connection_node(conn_info, tables)
+
 class HeaderFilterMenu(ModalScreen):
     def __init__(self, col_name: str, current_filter: str, current_sort: Optional[str]):
         super().__init__()
@@ -325,11 +401,12 @@ class HeaderFilterMenu(ModalScreen):
         elif event.button.id == "btn-clear-sort": self.dismiss({"filter": f_val, "sort": None})
 
 class QueryTab(Vertical):
-    def __init__(self, sql: str = ""):
+    def __init__(self, sql: str = "", connection_id: str = None):
         super().__init__()
         self.initial_sql = sql
         self.full_data, self.column_names, self.col_states = [], [], {}
-        self.running_task = None  # Track the running query task
+        self.running_task = None
+        self.connection_id = connection_id
 
     def compose(self) -> ComposeResult:
         text_area = TextArea(
@@ -459,15 +536,81 @@ class ExportDialog(ModalScreen):
             # Show error if pandas not available
             pass
 
+class AddConnectionDialog(ModalScreen):
+    """Modal dialog to add a MySQL or MSSQL connection."""
+
+    def __init__(self, existing_conn: dict = None):
+        super().__init__()
+        self.existing_conn = existing_conn
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="conn-dialog"):
+            yield Static("Add Database Connection", id="conn-dialog-title")
+            yield Static("Type:")
+            yield Select(
+                [("MySQL", "mysql"), ("MSSQL", "mssql")],
+                prompt="Select type",
+                id="conn-type",
+                allow_blank=False,
+                value="mysql",
+            )
+            yield Input(placeholder="Display name...", id="conn-display-name")
+            yield Input(placeholder="Host (e.g. localhost)", id="conn-host", value="localhost")
+            yield Input(placeholder="Port", id="conn-port", value="3306")
+            yield Input(placeholder="Username", id="conn-user")
+            yield Input(placeholder="Password", id="conn-password", password=True)
+            yield Input(placeholder="Database name", id="conn-database")
+            with Horizontal():
+                yield Button("Connect", variant="primary", id="btn-connect")
+                yield Button("Cancel", id="btn-conn-cancel")
+            yield Static("", id="conn-status")
+
+    def on_mount(self):
+        self.query_one("#conn-display-name").focus()
+        if self.existing_conn:
+            self.query_one("#conn-type", Select).value = self.existing_conn["type"]
+            self.query_one("#conn-display-name", Input).value = self.existing_conn.get("display_name", "")
+            self.query_one("#conn-host", Input).value = self.existing_conn.get("host", "localhost")
+            self.query_one("#conn-port", Input).value = str(self.existing_conn.get("port", "3306"))
+            self.query_one("#conn-user", Input).value = self.existing_conn.get("user", "")
+            self.query_one("#conn-password", Input).value = self.existing_conn.get("password", "")
+            self.query_one("#conn-database", Input).value = self.existing_conn.get("database", "")
+
+    def on_select_changed(self, event: Select.Changed):
+        if event.select.id == "conn-type":
+            port_input = self.query_one("#conn-port", Input)
+            if event.value == "mysql" and port_input.value in ("1433", ""):
+                port_input.value = "3306"
+            elif event.value == "mssql" and port_input.value in ("3306", ""):
+                port_input.value = "1433"
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "btn-conn-cancel":
+            self.dismiss()
+        elif event.button.id == "btn-connect":
+            conn_info = {
+                "id": self.existing_conn["id"] if self.existing_conn else f"conn_{int(datetime.now().timestamp() * 1000)}",
+                "display_name": self.query_one("#conn-display-name", Input).value.strip(),
+                "type": self.query_one("#conn-type", Select).value,
+                "host": self.query_one("#conn-host", Input).value.strip(),
+                "port": int(self.query_one("#conn-port", Input).value.strip() or "0"),
+                "user": self.query_one("#conn-user", Input).value.strip(),
+                "password": self.query_one("#conn-password", Input).value,
+                "database": self.query_one("#conn-database", Input).value.strip(),
+            }
+            if not conn_info["display_name"]:
+                conn_info["display_name"] = f"{conn_info['type']}://{conn_info['host']}/{conn_info['database']}"
+            if not all([conn_info["host"], conn_info["database"]]):
+                self.query_one("#conn-status").update("[red]Host and database are required[/red]")
+                return
+            self.dismiss(conn_info)
+
 class DuckCLI(App):
     CSS = """
     Screen { layout: horizontal; }
     #sidebar { width: 30; background: $surface; }
     #main-content { width: 1fr; }
-    #files-container { height: 1fr; }
-    #history-container { height: 1fr; }
-    #saved-queries-container { height: 1fr; }
-    #history-list, #saved-queries-list { height: 1fr; }
+    #saved-queries-tree, #history-tree { height: auto; max-height: 30%; }
     TabbedContent { width: 100%; }
     TextArea { height: 35%; border-bottom: tall $primary; }
     DataTable { height: 60%; }
@@ -493,11 +636,17 @@ class DuckCLI(App):
     #export-modal { width: 50; height: auto; background: $surface; border: tall $primary; padding: 2; }
     #export-modal-title { text-style: bold; margin-bottom: 1; text-align: center; }
     #export-filename { margin-bottom: 1; }
+    #db-tree { height: auto; max-height: 40%; }
+    #conn-dialog { width: 60; height: auto; background: $surface; border: tall $primary; padding: 2; }
+    #conn-dialog-title { text-style: bold; margin-bottom: 1; text-align: center; }
+    #conn-status { height: 1; margin-top: 1; }
+    AddConnectionDialog { align: center middle; background: rgba(0, 0, 0, 0.7); }
     """
     BINDINGS = [
         ("ctrl+enter", "run_query", "Run"),
         ("ctrl+s", "save_query", "Save Query"),
         ("ctrl+w", "close_tab", "Close Tab"),
+        ("ctrl+d", "disconnect_db", "Disconnect DB"),
         ("ctrl+a", "about", "About"),
         ("ctrl+q", "quit", "Quit")
     ]
@@ -506,16 +655,16 @@ class DuckCLI(App):
         super().__init__()
         self.con = duckdb.connect()
         self.config = load_config()
+        self.db_connections: dict = {}
 
     def compose(self) -> ComposeResult:
         with Horizontal():
             with Vertical(id="sidebar"):
                 yield Static("Explorer", id="explorer-header")
                 yield DuckTree(CWD, id="files")
-                yield Static("Saved Queries", id="saved-header")
-                yield ListView(id="saved-queries-list")
-                yield Static("History", id="history-header")
-                yield ListView(id="history-list")
+                yield DatabaseTree()
+                yield Tree("Saved Queries", id="saved-queries-tree")
+                yield Tree("History", id="history-tree")
             yield ResizeHandle()
             with Vertical(id="main-content"):
                 yield TabbedContent(id="tabs")
@@ -523,20 +672,124 @@ class DuckCLI(App):
         yield Footer()
 
     def on_mount(self):
-        # Load history and saved queries
         self.load_history_list()
         self.load_saved_queries_list()
-        
-        # Load last query from history if available
+        self.load_saved_connections()
+
         sql = ""
         if self.config["history"]:
             sql = self.config["history"][-1]["sql"]
         self.run_worker(self.add_new_tab("Main", sql))
 
-    async def add_new_tab(self, name: str, sql: str, run: bool = False):
+    def load_saved_connections(self):
+        """Load saved connections from config and attempt to connect."""
+        for conn_info in self.config.get("connections", []):
+            self.run_worker(self.connect_database(conn_info))
+
+    async def connect_database(self, conn_info: dict):
+        """Establish a database connection and populate tree."""
+        conn_id = conn_info["id"]
+        db_tree = self.query_one("#db-tree", DatabaseTree)
+        db_tree.add_connection_node(conn_info)
+        try:
+            if conn_info["type"] == "mysql":
+                tables = await self._connect_mysql(conn_info)
+            elif conn_info["type"] == "mssql":
+                tables = await self._connect_mssql(conn_info)
+            else:
+                raise ValueError(f"Unknown type: {conn_info['type']}")
+            db_tree.update_tables(conn_id, tables)
+        except Exception as e:
+            db_tree.remove_connection_node(conn_id)
+            err_node = db_tree.root.add(
+                f"[red]ERR: {conn_info['display_name']}[/red]",
+                data={"type": "error", "conn_id": conn_id},
+            )
+            err_node.add_leaf(f"[red]{str(e)[:60]}[/red]")
+            self.db_connections.pop(conn_id, None)
+
+    async def _connect_mysql(self, conn_info: dict) -> list:
+        conn_id = conn_info["id"]
+        alias = conn_id.replace("-", "_")
+        attach_str = (
+            f"host={conn_info['host']} "
+            f"user={conn_info['user']} "
+            f"port={conn_info['port']} "
+            f"database={conn_info['database']} "
+            f"password={conn_info['password']}"
+        )
+        def do_attach():
+            self.con.execute("INSTALL mysql; LOAD mysql;")
+            try:
+                self.con.execute(f"DETACH {alias}")
+            except Exception:
+                pass
+            self.con.execute(f"ATTACH '{attach_str}' AS {alias} (TYPE MYSQL)")
+            result = self.con.execute(
+                f"SELECT table_name FROM information_schema.tables "
+                f"WHERE table_catalog = '{alias}'"
+            ).fetchall()
+            return [row[0] for row in result]
+        tables = await asyncio.to_thread(do_attach)
+        self.db_connections[conn_id] = {"type": "mysql", "alias": alias}
+        return tables
+
+    async def _connect_mssql(self, conn_info: dict) -> list:
+        import pymssql
+        conn_id = conn_info["id"]
+        def do_connect():
+            conn = pymssql.connect(
+                server=conn_info["host"],
+                port=conn_info["port"],
+                user=conn_info["user"],
+                password=conn_info["password"],
+                database=conn_info["database"],
+                login_timeout=10,
+            )
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME"
+            )
+            tables = [row[0] for row in cursor.fetchall()]
+            return conn, tables
+        conn, tables = await asyncio.to_thread(do_connect)
+        self.db_connections[conn_id] = {"type": "mssql", "connection": conn}
+        return tables
+
+    def _disconnect(self, conn_id: str):
+        conn_meta = self.db_connections.pop(conn_id, None)
+        if conn_meta:
+            if conn_meta["type"] == "mysql":
+                try:
+                    self.con.execute(f"DETACH {conn_meta['alias']}")
+                except Exception:
+                    pass
+            elif conn_meta["type"] == "mssql":
+                try:
+                    conn_meta["connection"].close()
+                except Exception:
+                    pass
+        db_tree = self.query_one("#db-tree", DatabaseTree)
+        db_tree.remove_connection_node(conn_id)
+        delete_connection(conn_id)
+        self.config = load_config()
+
+    def action_disconnect_db(self):
+        try:
+            db_tree = self.query_one("#db-tree", DatabaseTree)
+            node = db_tree.cursor_node
+            if node and node.data:
+                conn_id = node.data.get("conn_id")
+                if conn_id:
+                    self._disconnect(conn_id)
+        except Exception:
+            pass
+
+    async def add_new_tab(self, name: str, sql: str, run: bool = False, connection_id: str = None):
         tabs = self.query_one("#tabs", TabbedContent)
         tab_id = f"t{int(datetime.now().timestamp() * 1000)}"
-        await tabs.add_pane(TabPane(f"{name} ✕", QueryTab(sql), id=tab_id))
+        await tabs.add_pane(TabPane(f"{name} ✕", QueryTab(sql, connection_id=connection_id), id=tab_id))
         tabs.active = tab_id
         if run: self.set_timer(0.1, self.action_run_query)
 
@@ -560,18 +813,30 @@ class DuckCLI(App):
         # Track this task so it can be cancelled
         tab.running_task = asyncio.current_task()
 
+        conn_id = tab.connection_id
+        conn_meta = self.db_connections.get(conn_id) if conn_id else None
+
         def execute():
             start = time.perf_counter()
-            cursor = self.con.cursor()
-            res = cursor.execute(sql)
-            if not res.description:
+            if conn_meta and conn_meta["type"] == "mssql":
+                mssql_conn = conn_meta["connection"]
+                cursor = mssql_conn.cursor()
+                cursor.execute(sql)
+                if not cursor.description:
+                    return [], ["Info"], None, time.perf_counter() - start
+                cols = [d[0] for d in cursor.description]
+                data = [list(r) for r in cursor.fetchall()]
+                return data, cols, None, time.perf_counter() - start
+            else:
+                cursor = self.con.cursor()
+                res = cursor.execute(sql)
+                if not res.description:
+                    duration = time.perf_counter() - start
+                    return [], ["Info"], [["Success"]], duration
+                cols = [d[0] for d in res.description]
+                data = [list(r) for r in res.fetchall()]
                 duration = time.perf_counter() - start
-                return [], ["Info"], [["Success"]], duration
-
-            cols = [d[0] for d in res.description]
-            data = [list(r) for r in res.fetchall()]
-            duration = time.perf_counter() - start
-            return data, cols, None, duration
+                return data, cols, None, duration
 
         try:
             data, cols, _, duration = await asyncio.to_thread(execute)
@@ -579,7 +844,10 @@ class DuckCLI(App):
             tab.full_data = data
             tab.col_states = {i: {"filter": "", "sort": None} for i in range(len(cols))}
             self.refresh_tab_table(tab)
-            meta.update(f"Rows: {len(data)} | Time: {duration:.4f}s | Finished: {datetime.now().strftime('%H:%M:%S')}")
+            conn_label = ""
+            if conn_meta:
+                conn_label = f" | via {conn_meta['type'].upper()}"
+            meta.update(f"Rows: {len(data)} | Time: {duration:.4f}s{conn_label} | Finished: {datetime.now().strftime('%H:%M:%S')}")
         except asyncio.CancelledError:
             meta.update("Query cancelled")
         except Exception as e:
@@ -608,32 +876,6 @@ class DuckCLI(App):
         
         self.push_screen(SaveQueryDialog(sql), handle_result)
 
-    def on_list_view_selected(self, event: ListView.Selected):
-        """Handle selection from history or saved queries"""
-        item_id = event.item.id
-        
-        if item_id.startswith("hist_"):
-            # Extract the timestamp from the ID (last part after the second underscore)
-            parts = item_id.split('_', 2)  # Split into 3 parts: ['hist', 'index', 'timestamp_us']
-            if len(parts) == 3 and parts[2].isdigit():
-                timestamp_us = int(parts[2])
-                
-                # Find the history item with the closest timestamp
-                for hist_item in self.config["history"]:
-                    item_timestamp = int(datetime.fromisoformat(hist_item["timestamp"]).timestamp() * 1000000)
-                    if item_timestamp == timestamp_us:
-                        self.load_query_in_current_tab(hist_item["sql"])
-                        break
-        elif item_id.startswith("saved_"):
-            # Extract the name from the ID (before the last underscore and index)
-            parts = item_id.rsplit('_', 1)  # Split from the right, keeping the index part
-            if len(parts) == 2 and parts[1].isdigit():
-                name = parts[0].replace("saved_", "")
-                for saved_item in self.config["saved_queries"]:
-                    if saved_item["name"] == name:
-                        self.load_query_in_current_tab(saved_item["sql"])
-                        break
-    
     def load_query_in_current_tab(self, sql: str):
         """Load a query into the current active tab"""
         tabs = self.query_one("#tabs", TabbedContent)
@@ -644,43 +886,28 @@ class DuckCLI(App):
         textarea.text = sql
 
     def load_history_list(self):
-        """Load history into the history list view"""
-        history_list = self.query_one("#history-list", ListView)
-        history_list.clear()
-        
-        # Show all history items (unlimited) - reversed to show most recent first
+        """Load history into the history tree"""
+        tree = self.query_one("#history-tree", Tree)
+        tree.root.expand()
+        # Remove old children
+        for child in list(tree.root.children):
+            child.remove()
         for i, item in enumerate(reversed(self.config["history"])):
             timestamp = datetime.fromisoformat(item["timestamp"]).strftime("%H:%M:%S")
-            label = f"[{timestamp}] {item['sql'][:50]}{'...' if len(item['sql']) > 50 else ''}"
-            # Create a safe ID by using a prefix and the index to ensure uniqueness
-            safe_id = f"hist_{i}_{int(datetime.fromisoformat(item['timestamp']).timestamp()*1000000)}"
-            list_item = ListItem(Label(label), id=safe_id)
-            try:
-                history_list.append(list_item)
-            except Exception:
-                # If there's an issue with appending, try with a more unique ID
-                safe_id = f"hist_{i}_{int(datetime.fromisoformat(item['timestamp']).timestamp()*1000000)}_{hash(item['sql']) % 10000}"
-                list_item = ListItem(Label(label), id=safe_id)
-                history_list.append(list_item)
+            sql_preview = item["sql"][:50] + ("..." if len(item["sql"]) > 50 else "")
+            label = f"[{timestamp}] {sql_preview}"
+            tree.root.add_leaf(label, data={"type": "history", "sql": item["sql"]})
 
     def load_saved_queries_list(self):
-        """Load saved queries into the saved queries list view"""
-        saved_list = self.query_one("#saved-queries-list", ListView)
-        saved_list.clear()
-        
+        """Load saved queries into the saved queries tree"""
+        tree = self.query_one("#saved-queries-tree", Tree)
+        tree.root.expand()
+        for child in list(tree.root.children):
+            child.remove()
         for i, item in enumerate(self.config["saved_queries"]):
             timestamp = datetime.fromisoformat(item["timestamp"]).strftime("%d/%m %H:%M")
             label = f"{item['name']} [{timestamp}]"
-            # Create a safe ID for the saved query using name and index to ensure uniqueness
-            safe_name = item['name'].replace(' ', '_').replace('-', '_')
-            list_item = ListItem(Label(label), id=f"saved_{safe_name}_{i}")
-            try:
-                saved_list.append(list_item)
-            except Exception:
-                # If there's an issue with appending, try with a more unique ID
-                safe_id = f"saved_{safe_name}_{i}_{int(datetime.fromisoformat(item['timestamp']).timestamp())}"
-                list_item = ListItem(Label(label), id=safe_id)
-                saved_list.append(list_item)
+            tree.root.add_leaf(label, data={"type": "saved", "sql": item["sql"]})
 
     def refresh_tab_table(self, tab: QueryTab):
         tbl, data = tab.query_one(DataTable), [r[:] for r in tab.full_data]
@@ -736,8 +963,48 @@ class DuckCLI(App):
 
     def action_quit(self): self.exit()
 
+    def on_tree_node_selected(self, event: Tree.NodeSelected):
+        """Handle selection in database tree, saved queries tree, and history tree."""
+        node = event.node
+        if not node.data:
+            return
+        node_type = node.data.get("type")
+        if node_type == "table":
+            conn_id = node.data["conn_id"]
+            table_name = node.data["table"]
+            conn_meta = self.db_connections.get(conn_id)
+            if conn_meta and conn_meta["type"] == "mysql":
+                alias = conn_meta["alias"]
+                sql = f"SELECT * FROM {alias}.{table_name} LIMIT 100;"
+                self.run_worker(self.add_new_tab(table_name, sql, run=True))
+            elif conn_meta and conn_meta["type"] == "mssql":
+                sql = f"SELECT TOP 100 * FROM [{table_name}];"
+                self.run_worker(self.add_new_tab(table_name, sql, run=True, connection_id=conn_id))
+        elif node_type == "error":
+            conn_id = node.data.get("conn_id")
+            for c in self.config.get("connections", []):
+                if c["id"] == conn_id:
+                    def handle_retry(result):
+                        if result:
+                            save_connection(result)
+                            self.config = load_config()
+                            self.run_worker(self.connect_database(result))
+                    self.push_screen(AddConnectionDialog(existing_conn=c), handle_retry)
+                    break
+        elif node_type == "add_connection":
+            def handle_new_conn(result):
+                if result:
+                    save_connection(result)
+                    self.config = load_config()
+                    self.run_worker(self.connect_database(result))
+            self.push_screen(AddConnectionDialog(), handle_new_conn)
+        elif node_type in ("history", "saved"):
+            sql = node.data.get("sql")
+            if sql:
+                self.load_query_in_current_tab(sql)
+
     def on_button_pressed(self, event: Button.Pressed):
-        """Handle export button presses"""
+        """Handle button presses"""
         if event.button.id in ["export-csv", "export-excel"]:
             # Find the current tab and its data
             tabs = self.query_one("#tabs", TabbedContent)
