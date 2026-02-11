@@ -1,3 +1,5 @@
 textual
 duckdb
 pyinstaller
+pandas
+openpyxl

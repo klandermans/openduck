@@ -14,7 +14,7 @@ from textual.widgets import (
     Header, Footer, TextArea, DataTable, DirectoryTree,
     Static, Input, Button, TabbedContent, TabPane, ListView, ListItem, Label
 )
-from textual.events import MouseEvent
+from textual.events import MouseEvent, Click, MouseDown, MouseMove, MouseUp
 from textual.screen import ModalScreen
 from pathlib import Path
 from datetime import datetime
@@ -24,6 +24,7 @@ import os
 import asyncio
 import time
 import json
+import random
 
 # =====================
 # Config & Helpers
@@ -105,7 +106,91 @@ def save_query(name: str, sql: str):
 # =====================
 # UI Components
 # =====================
+MATRIX_CHARS = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉ0123456789"
+# ANSI 256: 82=#87ff00, 46=#00ff00, 40=#00d700, 34=#00af00, 28=#008700, 22=#005f00
+MATRIX_SHADES = ["#87ff00", "#00ff00", "#00d700", "#00af00", "#008700", "#005f00"]
+
+class MatrixScreen(ModalScreen):
+    DEFAULT_CSS = """
+    MatrixScreen { background: black; }
+    #matrix-canvas { width: 100%; height: 100%; background: black; }
+    """
+    def __init__(self):
+        super().__init__()
+        self._drops = []
+        self._grid = []
+        self._colors = []
+        self._timer = None
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="matrix-canvas")
+
+    def on_mount(self) -> None:
+        cols = self.screen.size.width
+        rows = self.screen.size.height
+        self._drops = [random.randint(0, rows) for _ in range(cols)]
+        # Persistent grid - characters stay until overwritten
+        self._grid = [[" "] * cols for _ in range(rows)]
+        self._colors = [["#005f00"] * cols for _ in range(rows)]
+        self._timer = self.set_interval(0.03, self._tick)
+
+    def _tick(self) -> None:
+        cols = self.screen.size.width
+        rows = self.screen.size.height
+        # Resize grids if terminal changed
+        while len(self._drops) < cols:
+            self._drops.append(0)
+        self._drops = self._drops[:cols]
+        while len(self._grid) < rows:
+            self._grid.append([" "] * cols)
+            self._colors.append(["#005f00"] * cols)
+        self._grid = self._grid[:rows]
+        self._colors = self._colors[:rows]
+        for r in range(rows):
+            while len(self._grid[r]) < cols:
+                self._grid[r].append(" ")
+                self._colors[r].append("#005f00")
+            self._grid[r] = self._grid[r][:cols]
+            self._colors[r] = self._colors[r][:cols]
+        # Draw drops - characters persist on the grid like the original
+        for i in range(cols):
+            if random.random() > 0.97:
+                self._drops[i] = 0
+            for j, shade in enumerate(MATRIX_SHADES):
+                y = self._drops[i] - j
+                if 0 <= y < rows:
+                    self._grid[y][i] = random.choice(MATRIX_CHARS)
+                    self._colors[y][i] = shade
+            self._drops[i] += 1
+            if self._drops[i] >= rows:
+                self._drops[i] = 0
+        # Render
+        lines = []
+        for r in range(rows):
+            parts = []
+            for c in range(cols):
+                ch = self._grid[r][c]
+                if ch != " ":
+                    parts.append(f"[{self._colors[r][c]}]{ch}[/]")
+                else:
+                    parts.append(" ")
+            lines.append("".join(parts))
+        self.query_one("#matrix-canvas").update("\n".join(lines))
+
+    def on_key(self) -> None:
+        if self._timer:
+            self._timer.stop()
+        self.dismiss()
+
+    def on_click(self) -> None:
+        if self._timer:
+            self._timer.stop()
+        self.dismiss()
+
 class AboutScreen(ModalScreen):
+    DEFAULT_CSS = """
+    #easter-egg { color: $text-disabled; }
+    """
     def compose(self) -> ComposeResult:
         with Middle():
             with Vertical(id="about-inner"):
@@ -115,9 +200,61 @@ class AboutScreen(ModalScreen):
                 yield Static("[b]Author:[/b] Bertatron")
                 yield Static("[b]License:[/b] MIT")
                 yield Static("\nKISS - Metadata & Async enabled.")
+                yield Static("Don't click here", id="easter-egg")
                 yield Static("\n[Press any key to close]", id="about-footer")
+
     def on_key(self) -> None: self.dismiss()
-    def on_click(self) -> None: self.dismiss()
+
+    def on_click(self, event: Click) -> None:
+        if hasattr(event, 'widget') and event.widget and event.widget.id == "easter-egg":
+            self.dismiss()
+            self.app.push_screen(MatrixScreen())
+        else:
+            try:
+                widget, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
+                if widget.id == "easter-egg":
+                    self.dismiss()
+                    self.app.push_screen(MatrixScreen())
+                    return
+            except Exception:
+                pass
+            self.dismiss()
+
+class ResizeHandle(Static):
+    """A draggable handle to resize the sidebar."""
+    DEFAULT_CSS = """
+    ResizeHandle {
+        width: 1;
+        height: 100%;
+        background: $primary;
+    }
+    ResizeHandle:hover {
+        background: $accent;
+    }
+    """
+    def __init__(self):
+        super().__init__("┃")
+        self._dragging = False
+
+    def on_mouse_down(self, event: MouseDown) -> None:
+        self._dragging = True
+        self.capture_mouse()
+        event.stop()
+
+    def on_mouse_move(self, event: MouseMove) -> None:
+        if self._dragging:
+            # screen_x gives us the absolute position of the mouse
+            screen_width = self.screen.size.width
+            new_width = max(10, min(event.screen_x, screen_width - 20))
+            sidebar = self.screen.query_one("#sidebar")
+            sidebar.styles.width = new_width
+            event.stop()
+
+    def on_mouse_up(self, event: MouseUp) -> None:
+        if self._dragging:
+            self._dragging = False
+            self.release_mouse()
+            event.stop()
 
 class DuckTree(DirectoryTree):
     def filter_paths(self, paths: Iterable[Path]) -> Iterable[Path]:
@@ -155,14 +292,27 @@ class QueryTab(Vertical):
         super().__init__()
         self.initial_sql = sql
         self.full_data, self.column_names, self.col_states = [], [], {}
+        self.running_task = None  # Track the running query task
 
     def compose(self) -> ComposeResult:
-        yield TextArea(self.initial_sql, language="sql", id="query-input")
+        text_area = TextArea(
+            self.initial_sql,
+            language="sql",
+            id="query-input",
+            theme="css",  # Use the default theme which should support SQL
+            soft_wrap=False,
+            read_only=False,
+            tab_behavior="indent"
+        )
+        # Explicitly set the language after creation to ensure highlighting
+        text_area.language = "sql"
+        yield text_area
         with Horizontal():  # Container for table and export sidebar
             yield DataTable(id="results-table")
             with Vertical(id="export-sidebar"):
                 yield Button("↓CSV", id="export-csv", classes="export-btn")
                 yield Button("↓XLSX", id="export-excel", classes="export-btn")
+                yield Button("❌", id="cancel-query", classes="export-btn", tooltip="Cancel Query")
         yield Static("Ready", id="metadata-bar")
 
     def on_mount(self):
@@ -275,8 +425,8 @@ class ExportDialog(ModalScreen):
 class DuckCLI(App):
     CSS = """
     Screen { layout: horizontal; }
-    #sidebar { width: 30%; border-right: tall $primary; background: $surface; }
-    #main-content { width: 70%; }
+    #sidebar { width: 30; background: $surface; }
+    #main-content { width: 1fr; }
     #files-container { height: 1fr; }
     #history-container { height: 1fr; }
     #saved-queries-container { height: 1fr; }
@@ -329,6 +479,7 @@ class DuckCLI(App):
                 yield ListView(id="saved-queries-list")
                 yield Static("History", id="history-header")
                 yield ListView(id="history-list")
+            yield ResizeHandle()
             with Vertical(id="main-content"):
                 yield TabbedContent(id="tabs")
         yield Header()
@@ -348,7 +499,7 @@ class DuckCLI(App):
     async def add_new_tab(self, name: str, sql: str, run: bool = False):
         tabs = self.query_one("#tabs", TabbedContent)
         tab_id = f"t{int(datetime.now().timestamp() * 1000)}"
-        await tabs.add_pane(TabPane(name, QueryTab(sql), id=tab_id))
+        await tabs.add_pane(TabPane(f"{name} ✕", QueryTab(sql), id=tab_id))
         tabs.active = tab_id
         if run: self.set_timer(0.1, self.action_run_query)
 
@@ -368,6 +519,9 @@ class DuckCLI(App):
         meta = tab.query_one("#metadata-bar")
         tbl.loading = True
         meta.update("Executing...")
+
+        # Track this task so it can be cancelled
+        tab.running_task = asyncio.current_task()
 
         def execute():
             start = time.perf_counter()
@@ -389,6 +543,8 @@ class DuckCLI(App):
             tab.col_states = {i: {"filter": "", "sort": None} for i in range(len(cols))}
             self.refresh_tab_table(tab)
             meta.update(f"Rows: {len(data)} | Time: {duration:.4f}s | Finished: {datetime.now().strftime('%H:%M:%S')}")
+        except asyncio.CancelledError:
+            meta.update("Query cancelled")
         except Exception as e:
             tbl.clear(columns=True)
             tbl.add_column("Error")
@@ -396,6 +552,7 @@ class DuckCLI(App):
             meta.update("Error occurred")
         finally:
             tbl.loading = False
+            tab.running_task = None  # Clear the running task reference
 
     def action_save_query(self):
         """Save the current query with a name"""
@@ -521,9 +678,25 @@ class DuckCLI(App):
             await self.add_new_tab(Path(event.path).name, sql_for_file(Path(event.path)), run=True)
 
     def action_about(self): self.push_screen(AboutScreen())
+    def on_click(self, event: Click) -> None:
+        """Handle clicks on tab close buttons (✕ in tab titles)."""
+        from textual.widgets._tabbed_content import ContentTab
+        try:
+            widget, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
+        except Exception:
+            return
+        if isinstance(widget, ContentTab) and widget.label_text.endswith(" ✕"):
+            # Check if click was on the ✕ area (last 3 characters of the tab)
+            relative_x = event.screen_x - widget.region.x
+            if relative_x >= widget.region.width - 3:
+                pane_id = ContentTab.sans_prefix(widget.id)
+                self.query_one("#tabs", TabbedContent).remove_pane(pane_id)
+                event.stop()
+
     def action_close_tab(self):
         tabs = self.query_one("#tabs", TabbedContent)
         if tabs.active: tabs.remove_pane(tabs.active)
+
     def action_quit(self): self.exit()
 
     def on_button_pressed(self, event: Button.Pressed):
@@ -553,6 +726,21 @@ class DuckCLI(App):
             
             # Show export dialog
             self.push_screen(ExportDialog(tab, export_type), handle_export)
+        
+        elif event.button.id == "cancel-query":
+            # Cancel the running query
+            tabs = self.query_one("#tabs", TabbedContent)
+            if not tabs.active: 
+                return
+            
+            tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
+            if tab.running_task and not tab.running_task.done():
+                tab.running_task.cancel()
+                meta = tab.query_one("#metadata-bar")
+                meta.update("Query cancelled")
+                tbl = tab.query_one(DataTable)
+                tbl.loading = False
+        
 
 if __name__ == "__main__":
     DuckCLI().run()
