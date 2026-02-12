@@ -8,6 +8,8 @@ DuckCLI Features:
 - History: Store query history in openduck.json
 """
 
+import logging
+import datetime as dt_module
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, Middle, ScrollableContainer
 from textual.widgets import (
@@ -25,6 +27,13 @@ import os
 import asyncio
 import time
 import json
+
+# Configure logging to write to current directory
+logging.basicConfig(
+    filename='openduck_debug.log',
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 import random
 
 # =====================
@@ -971,8 +980,12 @@ class DuckCLI(App):
         tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
         idx = int(event.column_key.value)
         
+        logging.debug(f"Header selected: column index {idx}, column name {tab.column_names[idx] if idx < len(tab.column_names) else 'N/A'}")
+        
         # Toggle sort direction: None -> ASC -> DESC -> None
         current_sort = tab.col_states[idx]["sort"]
+        logging.debug(f"Current sort state for column {idx}: {current_sort}")
+        
         if current_sort is None:
             new_sort = "asc"
         elif current_sort == "asc":
@@ -980,12 +993,15 @@ class DuckCLI(App):
         else:  # current_sort == "desc"
             new_sort = None
         
+        logging.debug(f"New sort state for column {idx}: {new_sort}")
+        
         # Clear all other sorts
         for i in tab.col_states:
             tab.col_states[i]["sort"] = None
         
         # Apply new sort
         tab.col_states[idx]["sort"] = new_sort
+        logging.debug(f"Applied sort: {new_sort} to column {idx}, refreshing table")
         self.refresh_tab_table(tab)
 
     async def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected):
