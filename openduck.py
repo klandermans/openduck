@@ -423,32 +423,6 @@ class DatabaseTree(Vertical):
         if conn_info:
             self.add_connection_node(conn_info, tables)
 
-class HeaderFilterMenu(ModalScreen):
-    def __init__(self, col_name: str, current_filter: str, current_sort: Optional[str]):
-        super().__init__()
-        self.col_name, self.current_filter, self.current_sort = col_name, current_filter, current_sort
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="menu"):
-            yield Static(f"Column: {self.col_name}", id="menu-title")
-            yield Input(value=self.current_filter, placeholder="Filter text...", id="filter-input")
-            with Horizontal():
-                yield Button("ASC ▲", id="btn-asc")
-                yield Button("DESC ▼", id="btn-desc")
-                yield Button("Reset", variant="error", id="btn-clear-sort")
-            with Horizontal():
-                yield Button("Apply", variant="primary", id="btn-apply")
-                yield Button("Cancel", id="btn-cancel")
-
-    def on_mount(self): self.query_one("#filter-input").focus()
-
-    def on_button_pressed(self, event: Button.Pressed):
-        f_val = self.query_one("#filter-input", Input).value
-        if event.button.id == "btn-cancel": self.dismiss()
-        elif event.button.id == "btn-apply": self.dismiss({"filter": f_val, "sort": self.current_sort})
-        elif event.button.id == "btn-asc": self.dismiss({"filter": f_val, "sort": "asc"})
-        elif event.button.id == "btn-desc": self.dismiss({"filter": f_val, "sort": "desc"})
-        elif event.button.id == "btn-clear-sort": self.dismiss({"filter": f_val, "sort": None})
 
 class QueryTab(Vertical):
     def __init__(self, sql: str = "", connection_id: str = None):
@@ -962,31 +936,57 @@ class DuckCLI(App):
 
     def refresh_tab_table(self, tab: QueryTab):
         tbl, data = tab.query_one(DataTable), [r[:] for r in tab.full_data]
+        # Apply filters first
         for i, s in tab.col_states.items():
             if s["filter"]:
                 f = s["filter"].lower()
                 data = [r for r in data if f in str(r[i]).lower()]
+        
+        # Apply sorting
         for i, s in tab.col_states.items():
             if s["sort"]:
                 data.sort(key=lambda x: x[i] if x[i] is not None else "", reverse=(s["sort"]=="desc"))
                 break
-        
+
         tbl.clear(columns=True)
+        # Add columns with sort indicators
         for i, name in enumerate(tab.column_names):
             s = tab.col_states[i]
-            lbl = f"{name}{' ▲' if s['sort']=='asc' else ' ▼' if s['sort']=='desc' else ''}{' 🔍' if s['filter'] else ''}"
+            sort_indicator = ''
+            if s['sort'] == 'asc':
+                sort_indicator = ' ▲'
+            elif s['sort'] == 'desc':
+                sort_indicator = ' ▼'
+            
+            filter_indicator = ' 🔍' if s['filter'] else ''
+            lbl = f"{name}{sort_indicator}{filter_indicator}"
             tbl.add_column(lbl, key=str(i))
-        for r in data: tbl.add_row(*[str(v) if v is not None else "NULL" for v in r])
+        
+        # Add data rows
+        for r in data: 
+            tbl.add_row(*[str(v) if v is not None else "NULL" for v in r])
 
     def on_data_table_header_selected(self, event: DataTable.HeaderSelected):
         tabs = self.query_one("#tabs", TabbedContent)
         tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
         idx = int(event.column_key.value)
-        def handle(res):
-            if res:
-                for i in tab.col_states: tab.col_states[i]["sort"] = None
-                tab.col_states[idx].update(res); self.refresh_tab_table(tab)
-        self.push_screen(HeaderFilterMenu(tab.column_names[idx], tab.col_states[idx]["filter"], tab.col_states[idx]["sort"]), handle)
+        
+        # Toggle sort direction: None -> ASC -> DESC -> None
+        current_sort = tab.col_states[idx]["sort"]
+        if current_sort is None:
+            new_sort = "asc"
+        elif current_sort == "asc":
+            new_sort = "desc"
+        else:  # current_sort == "desc"
+            new_sort = None
+        
+        # Clear all other sorts
+        for i in tab.col_states:
+            tab.col_states[i]["sort"] = None
+        
+        # Apply new sort
+        tab.col_states[idx]["sort"] = new_sort
+        self.refresh_tab_table(tab)
 
     async def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected):
         if is_duckdb_file(Path(event.path)):
