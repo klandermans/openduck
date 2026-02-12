@@ -28,12 +28,14 @@ import asyncio
 import time
 import json
 
-# Configure logging to write to current directory
+# Configure logging to write to current directory with improved format
 logging.basicConfig(
     filename='openduck_debug.log',
     level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+    filemode='a'
 )
+logger = logging.getLogger(__name__)
 import random
 
 # =====================
