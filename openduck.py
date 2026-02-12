@@ -639,6 +639,8 @@ class AddConnectionDialog(ModalScreen):
             self.dismiss(conn_info)
 
 class DuckCLI(App):
+    ENABLE_MOUSE_SUPPORT = True
+    
     CSS = """
     Screen { layout: horizontal; }
     #sidebar { width: 30; background: $surface; }
