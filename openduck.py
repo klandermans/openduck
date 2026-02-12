@@ -829,16 +829,22 @@ class DuckCLI(App):
 
     async def action_run_query(self):
         tabs = self.query_one("#tabs", TabbedContent)
-        if not tabs.active: return
+        if not tabs.active: 
+            logging.debug("No active tab found")
+            return
         tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
         sql = tab.query_one(TextArea).text.strip()
-        if not sql: return
+        if not sql: 
+            logging.debug("No SQL query to execute")
+            return
 
+        logging.debug(f"Executing query: {sql[:100]}{'...' if len(sql) > 100 else ''}")
+        
         # Update config after adding to history
         add_to_history(sql)
         self.config = load_config()  # Reload config to ensure it's up to date
         self.load_history_list()  # Refresh the history list in UI
-        
+
         tbl = tab.query_one(DataTable)
         meta = tab.query_one("#metadata-bar")
         tbl.loading = True
@@ -846,30 +852,37 @@ class DuckCLI(App):
 
         # Track this task so it can be cancelled
         tab.running_task = asyncio.current_task()
+        logging.debug("Query execution started, task tracked")
 
         conn_id = tab.connection_id
         conn_meta = self.db_connections.get(conn_id) if conn_id else None
+        logging.debug(f"Connection info: {conn_meta['type'] if conn_meta else 'None'}")
 
         def execute():
             start = time.perf_counter()
+            logging.debug("Executing SQL query in thread")
             if conn_meta and conn_meta["type"] == "mssql":
                 mssql_conn = conn_meta["connection"]
                 cursor = mssql_conn.cursor()
                 cursor.execute(sql)
                 if not cursor.description:
+                    logging.debug("Query returned no results (MS SQL)")
                     return [], ["Info"], None, time.perf_counter() - start
                 cols = [d[0] for d in cursor.description]
                 data = [list(r) for r in cursor.fetchall()]
+                logging.debug(f"MS SQL query executed: {len(data)} rows, {len(cols)} columns")
                 return data, cols, None, time.perf_counter() - start
             else:
                 cursor = self.con.cursor()
                 res = cursor.execute(sql)
                 if not res.description:
                     duration = time.perf_counter() - start
+                    logging.debug("Query returned no results (DuckDB)")
                     return [], ["Info"], [["Success"]], duration
                 cols = [d[0] for d in res.description]
                 data = [list(r) for r in res.fetchall()]
                 duration = time.perf_counter() - start
+                logging.debug(f"DuckDB query executed: {len(data)} rows, {len(cols)} columns")
                 return data, cols, None, duration
 
         try:
@@ -877,14 +890,18 @@ class DuckCLI(App):
             tab.column_names = cols
             tab.full_data = data
             tab.col_states = {i: {"filter": "", "sort": None} for i in range(len(cols))}
+            logging.debug(f"Setting up table with {len(cols)} columns and {len(data)} rows")
             self.refresh_tab_table(tab)
             conn_label = ""
             if conn_meta:
                 conn_label = f" | via {conn_meta['type'].upper()}"
             meta.update(f"Rows: {len(data)} | Time: {duration:.4f}s{conn_label} | Finished: {datetime.now().strftime('%H:%M:%S')}")
+            logging.debug(f"Query completed successfully: {len(data)} rows in {duration:.4f}s")
         except asyncio.CancelledError:
+            logging.debug("Query was cancelled")
             meta.update("Query cancelled")
         except Exception as e:
+            logging.error(f"Error executing query: {str(e)}")
             tbl.clear(columns=True)
             tbl.add_column("Error")
             tbl.add_row(str(e))
@@ -892,6 +909,7 @@ class DuckCLI(App):
         finally:
             tbl.loading = False
             tab.running_task = None  # Clear the running task reference
+            logging.debug("Query execution completed, task reference cleared")
 
     def action_save_query(self):
         """Save the current query with a name"""
@@ -944,17 +962,26 @@ class DuckCLI(App):
             tree.root.add_leaf(label, data={"type": "saved", "sql": item["sql"]})
 
     def refresh_tab_table(self, tab: QueryTab):
+        logging.debug(f"Refreshing table: {len(tab.full_data)} rows, {len(tab.column_names)} columns")
+        
         tbl, data = tab.query_one(DataTable), [r[:] for r in tab.full_data]
+        
         # Apply filters first
         for i, s in tab.col_states.items():
             if s["filter"]:
                 f = s["filter"].lower()
+                initial_count = len(data)
                 data = [r for r in data if f in str(r[i]).lower()]
+                logging.debug(f"Applied filter on column {i}: {initial_count} -> {len(data)} rows")
         
         # Apply sorting
+        sort_applied = False
         for i, s in tab.col_states.items():
             if s["sort"]:
+                initial_count = len(data)
                 data.sort(key=lambda x: x[i] if x[i] is not None else "", reverse=(s["sort"]=="desc"))
+                sort_applied = True
+                logging.debug(f"Applied sort on column {i} ({tab.column_names[i] if i < len(tab.column_names) else 'N/A'}): {s['sort']}, {initial_count} rows sorted")
                 break
 
         tbl.clear(columns=True)
@@ -970,10 +997,14 @@ class DuckCLI(App):
             filter_indicator = ' 🔍' if s['filter'] else ''
             lbl = f"{name}{sort_indicator}{filter_indicator}"
             tbl.add_column(lbl, key=str(i))
+            logging.debug(f"Added column {i}: {lbl}")
         
         # Add data rows
+        logging.debug(f"Adding {len(data)} data rows to table")
         for r in data: 
             tbl.add_row(*[str(v) if v is not None else "NULL" for v in r])
+        
+        logging.debug(f"Table refresh completed: {len(data)} rows, {len(tab.column_names)} columns")
 
     def on_data_table_header_selected(self, event: DataTable.HeaderSelected):
         tabs = self.query_one("#tabs", TabbedContent)
