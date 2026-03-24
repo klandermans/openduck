@@ -3,4 +3,5 @@ duckdb
 pyinstaller
 pandas
 openpyxl
+xlrd
 pymssql
