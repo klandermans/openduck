@@ -56,7 +56,9 @@ def sql_for_file(path: Path) -> str:
     if s == ".duckdb": return f"ATTACH '{p}' AS other;\nSHOW TABLES;"
     if s in {".sqlite", ".sqlite3", ".db"}:
         return f"INSTALL sqlite;\nLOAD sqlite;\nATTACH '{p}' AS sqlite_db (TYPE SQLITE);\nSHOW TABLES FROM sqlite_db;"
-    if s in {".xlsx", ".xls"}: return f"SELECT * FROM read_excel('{p}') LIMIT 100;"
+    if s in {".xlsx", ".xls"}: 
+        # Excel files need to be read via pandas and then converted to a DuckDB table
+        return f"-- Excel file: {p}\n-- Will be loaded via pandas when executed"
     if s in {".csv", ".csv.gz"}: return f"SELECT * FROM read_csv_auto('{p}') LIMIT 100;"
     if s in {".json", ".jsonl"}: return f"SELECT * FROM read_json_auto('{p}') LIMIT 100;"
     return f"SELECT * FROM '{p}' LIMIT 100;"
@@ -865,6 +867,26 @@ class DuckCLI(App):
         def execute():
             start = time.perf_counter()
             logging.debug("Executing SQL query in thread")
+            
+            # Check if this is an Excel file query
+            if sql.startswith("-- Excel file:"):
+                try:
+                    import pandas as pd
+                    # Extract file path from comment
+                    file_path = sql.split("Excel file: ")[1].split("\n")[0].strip()
+                    logging.debug(f"Loading Excel file via pandas: {file_path}")
+                    
+                    # Read Excel file with pandas
+                    df = pd.read_excel(file_path)
+                    cols = list(df.columns)
+                    data = [list(row) for row in df.values]
+                    duration = time.perf_counter() - start
+                    logging.debug(f"Excel file loaded: {len(data)} rows, {len(cols)} columns")
+                    return data, cols, None, duration
+                except Exception as e:
+                    logging.error(f"Error loading Excel file: {str(e)}")
+                    raise
+            
             if conn_meta and conn_meta["type"] == "mssql":
                 mssql_conn = conn_meta["connection"]
                 cursor = mssql_conn.cursor()
