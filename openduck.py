@@ -27,6 +27,8 @@ import os
 import asyncio
 import time
 import json
+import resource
+import sys
 
 # Configure logging to write to current directory with improved format
 logging.basicConfig(
@@ -451,25 +453,42 @@ class QueryTab(Vertical):
             self.initial_sql,
             language="sql",
             id="query-input",
-            theme="css",  # Use the default theme which should support SQL
-            soft_wrap=False,
+            theme="vscode_dark",
+            soft_wrap=False, # Uitgezet om de ValueError crash te voorkomen
             read_only=False,
-            tab_behavior="indent"
+            tab_behavior="indent",
+            show_line_numbers=True
         )
-        # Explicitly set the language after creation to ensure highlighting
-        text_area.language = "sql"
+        # Forceer SQL highlighting
+        try:
+            text_area.language = "sql"
+        except Exception:
+            pass
         yield text_area
         with Horizontal():  # Container for table and export sidebar
             yield DataTable(id="results-table")
             with Vertical(id="export-sidebar"):
                 yield Button("↓CSV", id="export-csv", classes="export-btn")
                 yield Button("↓XLSX", id="export-excel", classes="export-btn")
-                yield Button("❌", id="cancel-query", classes="export-btn", tooltip="Cancel Query")
-        yield Static("Ready", id="metadata-bar")
+                yield Button("Abort", id="cancel-query", classes="export-btn", tooltip="Cancel Query", variant="error")
+        with Horizontal(id="metadata-container"):
+            yield Static("Ready", id="metadata-bar")
+            yield Static("Memory: N/A", id="memory-bar")
 
     def on_mount(self):
         t = self.query_one(DataTable)
         t.cursor_type, t.zebra_stripes = "row", True
+        # Gebruik een kleine vertraging voor focus om crashes te voorkomen
+        self.set_timer(0.1, self.safe_focus)
+
+    def safe_focus(self):
+        """Focus de editor op een veilige manier."""
+        try:
+            editor = self.query_one("#query-input")
+            editor.move_cursor((0, 0))
+            editor.focus()
+        except Exception:
+            pass
 
 class SaveQueryDialog(ModalScreen):
     def __init__(self, query_text: str):
@@ -647,20 +666,28 @@ class DuckCLI(App):
     ENABLE_MOUSE_SUPPORT = True
     
     CSS = """
-    Screen { layout: horizontal; }
     #sidebar { width: 30; background: $surface; }
     #main-content { width: 1fr; }
     #saved-queries-tree, #history-tree { height: auto; max-height: 30%; }
-    TabbedContent { width: 100%; height: 100%; }
-    TextArea { height: 25%; border-bottom: tall $primary; }
+    TabbedContent { width: 100%; height: 1fr; }
+    TextArea { height: 35%; border-bottom: tall $primary; }
     DataTable { height: 1fr; }
-    #export-sidebar { width: auto; margin-left: 1; width: 8; background: $panel; border: round $primary; padding: 0; }
-    .export-btn { margin: 0; padding: 0; height: 2; width: 100%; }
-    #metadata-bar {
+    #export-sidebar { width: 12; margin-left: 1; background: $panel; border: round $primary; padding: 0; }
+    .export-btn { margin: 0; padding: 0; height: 3; width: 100%; }
+    #metadata-container {
         height: 1;
         background: $primary;
         color: $text;
+        layout: horizontal;
+    }
+    #metadata-bar {
+        width: 1fr;
         padding: 0 1;
+    }
+    #memory-bar {
+        width: auto;
+        padding: 0 1;
+        text-align: right;
     }
     #menu { padding: 1 2; background: $surface; border: tall $primary; width: 50; height: auto; }
     #menu-title { text-style: bold; margin-bottom: 1; }
@@ -716,11 +743,31 @@ class DuckCLI(App):
         self.load_history_list()
         self.load_saved_queries_list()
         self.load_saved_connections()
+        self.set_interval(1.0, self.update_memory_info)
 
         sql = ""
         if self.config["history"]:
             sql = self.config["history"][-1]["sql"]
-        self.run_worker(self.add_new_tab("Main", sql))
+        # Delay adding the first tab slightly to allow UI to settle
+        self.set_timer(0.2, lambda: self.run_worker(self.add_new_tab("Main", sql)))
+
+    def update_memory_info(self):
+        """Update the memory info in the active tab's footer bar."""
+        try:
+            mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            if sys.platform == 'darwin':
+                mem_mb = mem / (1024 * 1024)
+            else:
+                mem_mb = mem / 1024
+            
+            tabs = self.query_one("#tabs", TabbedContent)
+            if tabs.active:
+                tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
+                mem_bar = tab.query_one("#memory-bar")
+                color = "red" if mem_mb > 2048 else "cyan"
+                mem_bar.update(f"Memory: [{color}]{mem_mb:.1f} MB[/{color}]")
+        except Exception:
+            pass
 
     def load_saved_connections(self):
         """Load saved connections from config and attempt to connect."""
@@ -1255,6 +1302,13 @@ class DuckCLI(App):
             
             tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
             if tab.running_task and not tab.running_task.done():
+                logging.debug("Cancelling query task and interrupting DuckDB")
+                # Interrupt DuckDB execution
+                try:
+                    self.con.interrupt()
+                except Exception as e:
+                    logging.error(f"Error interrupting DuckDB: {e}")
+                
                 tab.running_task.cancel()
                 meta = tab.query_one("#metadata-bar")
                 meta.update("Query cancelled")
