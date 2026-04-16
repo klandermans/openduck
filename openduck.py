@@ -57,8 +57,9 @@ def sql_for_file(path: Path) -> str:
     if s in {".sqlite", ".sqlite3", ".db"}:
         return f"INSTALL sqlite;\nLOAD sqlite;\nATTACH '{p}' AS sqlite_db (TYPE SQLITE);\nSHOW TABLES FROM sqlite_db;"
     if s in {".xlsx", ".xls"}: 
-        # Excel files need to be read via pandas and then converted to a DuckDB table
-        return f"-- Excel file: {p}\n-- Will be loaded via pandas when executed"
+        # Excel files will be loaded via pandas and registered as DuckDB table
+        table_name = path.stem.replace(' ', '_').replace('-', '_')
+        return f"-- Excel file: {p}\nSELECT * FROM {table_name} LIMIT 100;"
     if s in {".csv", ".csv.gz"}: return f"SELECT * FROM read_csv_auto('{p}') LIMIT 100;"
     if s in {".json", ".jsonl"}: return f"SELECT * FROM read_json_auto('{p}') LIMIT 100;"
     return f"SELECT * FROM '{p}' LIMIT 100;"
@@ -833,6 +834,57 @@ class DuckCLI(App):
         tabs.active = tab_id
         if run: self.set_timer(0.1, self.action_run_query)
 
+    def _classify_file_error(self, e: Exception, file_path: str = "") -> str:
+        """Classify file-related errors and return user-friendly message"""
+        error_msg = str(e).lower()
+        original_error = str(e)
+        
+        # CSV-specific errors
+        if 'csv' in error_msg or 'read_csv' in error_msg:
+            if 'no such file' in error_msg or 'could not open' in error_msg:
+                return f"❌ File not found: {file_path}\n→ Check if the file exists and the path is correct"
+            elif 'permission' in error_msg:
+                return f"❌ Permission denied: {file_path}\n→ Check file permissions"
+            elif 'encoding' in error_msg:
+                return f"❌ Encoding error in CSV file\n→ The CSV file may have encoding issues. Try saving it with UTF-8 encoding"
+            elif 'delimiter' in error_msg or 'separator' in error_msg:
+                return f"❌ CSV format error\n→ The file may have inconsistent delimiters. Check the CSV format"
+            elif 'empty' in error_msg or 'no columns' in error_msg or 'no rows' in error_msg:
+                return f"❌ Empty or invalid CSV file\n→ The file appears to be empty or has no valid columns"
+            else:
+                return f"❌ Cannot read CSV file: {file_path}\n→ The file may be corrupted, empty, or in an unsupported format\n\nDetails: {str(e)}"
+        
+        # Excel-specific errors
+        elif 'excel' in error_msg or 'xlsx' in error_msg or 'xls' in error_msg:
+            if 'no such file' in error_msg:
+                return f"❌ Excel file not found: {file_path}"
+            elif 'permission' in error_msg:
+                return f"❌ Permission denied: {file_path}"
+            else:
+                return f"❌ Cannot read Excel file: {file_path}\n→ The file may be corrupted, password-protected, or in an unsupported format\n\nDetails: {str(e)}"
+        
+        # Parquet/Arrow errors
+        elif 'parquet' in error_msg or 'arrow' in error_msg:
+            return f"❌ Cannot read Parquet/Arrow file: {file_path}\n→ The file may be corrupted or in an incompatible format\n\nDetails: {str(e)}"
+        
+        # JSON errors
+        elif 'json' in error_msg:
+            return f"❌ Cannot read JSON file: {file_path}\n→ The file may have invalid JSON syntax\n\nDetails: {str(e)}"
+        
+        # Generic file errors
+        elif 'no such file' in error_msg or 'does not exist' in error_msg:
+            return f"❌ File not found: {file_path}\n→ The file does not exist at this location"
+        elif 'permission' in error_msg:
+            return f"❌ Permission denied: {file_path}\n→ You don't have permission to access this file"
+        elif 'disk i/o' in error_msg or 'io error' in error_msg:
+            return f"❌ Disk I/O error\n→ There may be a problem with the disk or file system"
+        elif 'out of memory' in error_msg:
+            return f"❌ Out of memory\n→ The file is too large to load into memory"
+        elif 'empty' in original_error.lower() or 'no columns' in original_error.lower():
+            return f"❌ Empty or invalid file\n→ The file appears to be empty or has no valid data"
+        else:
+            return f"❌ Error loading file: {file_path}\n\nDetails: {str(e)}"
+
     async def action_run_query(self):
         tabs = self.query_one("#tabs", TabbedContent)
         if not tabs.active: 
@@ -874,14 +926,24 @@ class DuckCLI(App):
                     import pandas as pd
                     # Extract file path from comment
                     file_path = sql.split("Excel file: ")[1].split("\n")[0].strip()
-                    logging.debug(f"Loading Excel file via pandas: {file_path}")
+                    table_name = Path(file_path).stem.replace(' ', '_').replace('-', '_')
+                    logging.debug(f"Loading Excel file via pandas: {file_path} as table '{table_name}'")
                     
                     # Read Excel file with pandas
                     df = pd.read_excel(file_path)
-                    cols = list(df.columns)
-                    data = [list(row) for row in df.values]
+                    
+                    # Register as DuckDB table
+                    self.con.register(table_name, df)
+                    logging.debug(f"Registered Excel data as table '{table_name}': {len(df)} rows, {len(df.columns)} columns")
+                    
+                    # Now execute the actual SELECT query
+                    actual_sql = sql.split("\n")[1].strip()
+                    logging.debug(f"Executing query on Excel table: {actual_sql}")
+                    res = self.con.execute(actual_sql)
+                    cols = [d[0] for d in res.description]
+                    data = [list(r) for r in res.fetchall()]
                     duration = time.perf_counter() - start
-                    logging.debug(f"Excel file loaded: {len(data)} rows, {len(cols)} columns")
+                    logging.debug(f"Excel query executed: {len(data)} rows, {len(cols)} columns")
                     return data, cols, None, duration
                 except Exception as e:
                     logging.error(f"Error loading Excel file: {str(e)}")
@@ -930,7 +992,29 @@ class DuckCLI(App):
             logging.error(f"Error executing query: {str(e)}")
             tbl.clear(columns=True)
             tbl.add_column("Error")
-            tbl.add_row(str(e))
+            
+            # Try to extract file path from the SQL for better error messages
+            import re
+            file_path = ""
+            # Check for read_csv_auto, read_json_auto, or direct file references
+            csv_match = re.search(r"read_csv_auto\('([^']+)'\)", sql)
+            json_match = re.search(r"read_json_auto\('([^']+)'\)", sql)
+            file_match = re.search(r"FROM '([^']+)'", sql)
+            excel_match = re.search(r"Excel file: ([^\n]+)", sql)
+            
+            if csv_match:
+                file_path = csv_match.group(1)
+            elif json_match:
+                file_path = json_match.group(1)
+            elif file_match:
+                file_path = file_match.group(1)
+            elif excel_match:
+                file_path = excel_match.group(1)
+            
+            # Use classified error message if available
+            error_message = self._classify_file_error(e, file_path) if file_path else str(e)
+            
+            tbl.add_row(error_message)
             meta.update("Error occurred")
         finally:
             tbl.loading = False
@@ -1062,8 +1146,16 @@ class DuckCLI(App):
         self.refresh_tab_table(tab)
 
     async def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected):
-        if is_duckdb_file(Path(event.path)):
-            await self.add_new_tab(Path(event.path).name, sql_for_file(Path(event.path)), run=True)
+        file_path = Path(event.path)
+        if is_duckdb_file(file_path):
+            try:
+                sql = sql_for_file(file_path)
+                await self.add_new_tab(file_path.name, sql, run=True)
+            except Exception as e:
+                logging.error(f"Error opening file {file_path}: {str(e)}")
+                # Show error in a new tab
+                error_sql = f"-- Error opening file: {file_path.name}\n-- {str(e)}"
+                await self.add_new_tab(f"❌ {file_path.name}", error_sql, run=False)
 
     def action_about(self): self.push_screen(AboutScreen())
     def on_click(self, event: Click) -> None:
