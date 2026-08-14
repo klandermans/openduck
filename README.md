@@ -2,6 +2,8 @@
 
 OpenDuck is an enhanced command-line interface for DuckDB with a modern TUI (Text User Interface) built using Textual. It provides advanced features for data exploration and query management.
 
+<img width="3004" height="1754" alt="image" src="https://github.com/user-attachments/assets/4aea9df6-6f00-494d-a171-d76a9a3b8133" />
+
 ## Features
 
 ### Original Features
