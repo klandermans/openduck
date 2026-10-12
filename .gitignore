@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Build & packaging
+build/
+dist/
+*.spec
+
+# Local data & logs
+openduck.json
+openduck_debug.log
+*.csv
+*.xlsx
+
+# Editor
+.idea/
+.vscode/
+nvim/
