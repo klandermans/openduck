@@ -19,6 +19,8 @@ from textual.widgets import (
 )
 from textual.events import MouseEvent, Click, MouseDown, MouseMove, MouseUp
 from textual.screen import ModalScreen
+from textual.binding import Binding
+from textual.document._document import Selection
 from pathlib import Path
 from datetime import datetime
 from typing import Iterable, List, Any, Optional
@@ -29,6 +31,7 @@ import time
 import json
 import resource
 import sys
+import subprocess
 
 # Configure logging to write to current directory with improved format
 logging.basicConfig(
@@ -141,6 +144,79 @@ def delete_connection(conn_id: str):
     config["connections"] = [c for c in config["connections"] if c["id"] != conn_id]
     save_config(config)
     return config
+
+def copy_to_system_clipboard(text: str) -> bool:
+    """Copy text to system clipboard (macOS pbcopy, xclip/wl-copy on Linux, clip on Windows)."""
+    if not text:
+        return False
+    try:
+        if sys.platform == "darwin":
+            p = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE, text=True)
+            p.communicate(input=text)
+            return True
+        elif sys.platform.startswith("linux"):
+            for cmd in (["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):
+                try:
+                    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
+                    p.communicate(input=text)
+                    return True
+                except FileNotFoundError:
+                    continue
+        elif sys.platform == "win32":
+            p = subprocess.Popen(["clip"], stdin=subprocess.PIPE, text=True)
+            p.communicate(input=text)
+            return True
+    except Exception as e:
+        logger.error(f"Failed to copy to system clipboard: {e}")
+    return False
+
+def get_system_clipboard() -> str:
+    """Read text from system clipboard (macOS pbpaste, wl-paste/xclip on Linux)."""
+    try:
+        if sys.platform == "darwin":
+            return subprocess.check_output(["pbpaste"], text=True)
+        elif sys.platform.startswith("linux"):
+            for cmd in (["wl-paste"], ["xclip", "-selection", "clipboard", "-o"], ["xsel", "--clipboard", "--output"]):
+                try:
+                    return subprocess.check_output(cmd, text=True)
+                except FileNotFoundError:
+                    continue
+    except Exception as e:
+        logger.error(f"Failed to read from system clipboard: {e}")
+    return ""
+
+def toggle_sql_comment_lines(lines: List[str]) -> List[str]:
+    """Toggle SQL line comments (-- ) like in VS Code."""
+    non_empty = [l for l in lines if l.strip()]
+    if not non_empty:
+        return [("-- " + l if not l.startswith("--") else l) for l in lines]
+
+    all_commented = all(l.lstrip().startswith("--") for l in non_empty)
+    result = []
+    if all_commented:
+        for l in lines:
+            if not l.strip():
+                result.append(l)
+                continue
+            indent_len = len(l) - len(l.lstrip())
+            indent = l[:indent_len]
+            content = l[indent_len:]
+            if content.startswith("-- "):
+                result.append(indent + content[3:])
+            elif content.startswith("--"):
+                result.append(indent + content[2:])
+            else:
+                result.append(l)
+    else:
+        for l in lines:
+            if not l.strip():
+                result.append(l)
+                continue
+            indent_len = len(l) - len(l.lstrip())
+            indent = l[:indent_len]
+            content = l[indent_len:]
+            result.append(indent + "-- " + content)
+    return result
 
 # =====================
 # UI Components
@@ -440,6 +516,214 @@ class DatabaseTree(Vertical):
             self.add_connection_node(conn_info, tables)
 
 
+# Construct bindings for SqlTextArea
+_sql_text_area_bindings = []
+for b in TextArea.BINDINGS:
+    if b.action == "cursor_line_start":
+        _sql_text_area_bindings.append(Binding("home", "cursor_line_start", "Cursor line start", show=False))
+    elif b.action == "select_all":
+        _sql_text_area_bindings.append(Binding("f7,ctrl+a,super+a", "select_all", "Select all", show=False))
+    elif b.action == "copy":
+        _sql_text_area_bindings.append(Binding("ctrl+c,super+c", "copy", "Copy", show=False))
+    elif b.action == "paste":
+        _sql_text_area_bindings.append(Binding("ctrl+v,super+v", "paste", "Paste", show=False))
+    elif b.action == "cut":
+        _sql_text_area_bindings.append(Binding("ctrl+x,super+x", "cut", "Cut", show=False))
+    elif b.action == "undo":
+        _sql_text_area_bindings.append(Binding("ctrl+z,super+z", "undo", "Undo", show=False))
+    elif b.action == "redo":
+        _sql_text_area_bindings.append(Binding("ctrl+y,super+y,shift+ctrl+z,ctrl+shift+z,shift+super+z,super+shift+z", "redo", "Redo", show=False))
+    else:
+        _sql_text_area_bindings.append(b)
+
+_sql_text_area_bindings.append(
+    Binding("f3,ctrl+slash,super+slash,ctrl+underscore,super+underscore,ctrl+7,super+7,ctrl+minus,super+minus", "toggle_comment", "Comment", show=False)
+)
+
+class SqlTextArea(TextArea):
+    allow_select = False
+    BINDINGS = _sql_text_area_bindings
+
+    def select_word_at(self, location: tuple[int, int]) -> None:
+        """Select the word at the given (row, col) location."""
+        row, col = location
+        if row >= self.document.line_count:
+            return
+        line = self.document.get_line(row)
+        if not line:
+            return
+        col = max(0, min(col, len(line)))
+
+        import re
+        word_char_regex = re.compile(r'\w')
+        if col < len(line) and not word_char_regex.match(line[col]) and col > 0 and word_char_regex.match(line[col - 1]):
+            col -= 1
+
+        if col < len(line) and word_char_regex.match(line[col]):
+            start_col = col
+            while start_col > 0 and word_char_regex.match(line[start_col - 1]):
+                start_col -= 1
+            end_col = col
+            while end_col < len(line) and word_char_regex.match(line[end_col]):
+                end_col += 1
+            self.selection = Selection((row, start_col), (row, end_col))
+        else:
+            start_col = col
+            while start_col > 0 and not line[start_col - 1].isspace() and not word_char_regex.match(line[start_col - 1]):
+                start_col -= 1
+            end_col = col
+            while end_col < len(line) and not line[end_col].isspace() and not word_char_regex.match(line[end_col]):
+                end_col += 1
+            if start_col < end_col:
+                self.selection = Selection((row, start_col), (row, end_col))
+
+    async def _on_click(self, event: Click) -> None:
+        if event.chain == 2:
+            target = self.get_target_document_location(event)
+            self.select_word_at(target)
+            if self.selected_text:
+                copy_to_system_clipboard(self.selected_text)
+                self.app._clipboard = self.selected_text
+            event.stop()
+            return
+        elif event.chain == 3:
+            cursor_row, _ = self.get_target_document_location(event)
+            self.select_line(cursor_row)
+            if self.selected_text:
+                copy_to_system_clipboard(self.selected_text)
+                self.app._clipboard = self.selected_text
+            event.stop()
+            return
+        await super()._on_click(event)
+
+    def _end_mouse_selection(self) -> None:
+        """When mouse selection finishes, copy selected text automatically to system clipboard."""
+        super()._end_mouse_selection()
+        if self.selected_text:
+            copy_to_system_clipboard(self.selected_text)
+            self.app._clipboard = self.selected_text
+
+    def action_copy(self) -> None:
+        """Copy selected text (or current line if no selection, like VS Code) to system clipboard."""
+        selected_text = self.selected_text
+        if selected_text:
+            copy_to_system_clipboard(selected_text)
+            self.app.copy_to_clipboard(selected_text)
+            self.notify("Gekopieerd naar klembord", timeout=1.5)
+        else:
+            row = self.cursor_location[0]
+            line = self.document.get_line(row)
+            if line:
+                copy_to_system_clipboard(line)
+                self.app.copy_to_clipboard(line)
+                self.notify("Regel gekopieerd naar klembord", timeout=1.5)
+
+    def action_cut(self) -> None:
+        """Cut selected text to system clipboard."""
+        selected_text = self.selected_text
+        if selected_text:
+            copy_to_system_clipboard(selected_text)
+            self.app.copy_to_clipboard(selected_text)
+            self.replace("", *self.selection)
+            self.notify("Geknipt naar klembord", timeout=1.5)
+        else:
+            row = self.cursor_location[0]
+            line = self.document.get_line(row)
+            if line:
+                copy_to_system_clipboard(line)
+                self.app.copy_to_clipboard(line)
+                self.action_delete_line()
+                self.notify("Regel geknipt naar klembord", timeout=1.5)
+
+    def action_paste(self) -> None:
+        """Paste from system clipboard (macOS pbpaste / local clipboard)."""
+        if self.read_only:
+            return
+        text = get_system_clipboard()
+        if not text:
+            text = self.app.clipboard
+        if text:
+            if result := self._replace_via_keyboard(text, *self.selection):
+                self.move_cursor(result.end_location)
+
+    def action_select_all(self) -> None:
+        """Select all text in document."""
+        self.select_all()
+
+    def action_toggle_comment(self) -> None:
+        """Toggle SQL comment (-- ) like in VS Code."""
+        selection = self.selection
+        start_row, start_col = selection.start
+        end_row, end_col = selection.end
+
+        if start_row > end_row or (start_row == end_row and start_col > end_col):
+            start_row, end_row = end_row, start_row
+            start_col, end_col = end_col, start_col
+
+        if end_row > start_row and end_col == 0:
+            actual_end_row = end_row - 1
+        else:
+            actual_end_row = end_row
+
+        actual_end_row = min(actual_end_row, max(0, self.document.line_count - 1))
+        lines = [self.document.get_line(r) for r in range(start_row, actual_end_row + 1)]
+        new_lines = toggle_sql_comment_lines(lines)
+
+        replacement = "\n".join(new_lines)
+        self.replace(replacement, (start_row, 0), (actual_end_row, len(lines[-1])), maintain_selection_offset=False)
+
+        if selection.is_empty:
+            new_col = min(len(new_lines[0]), max(0, start_col + (len(new_lines[0]) - len(lines[0]))))
+            self.move_cursor((start_row, new_col))
+        else:
+            self.selection = Selection((start_row, 0), (actual_end_row, len(new_lines[-1])))
+
+        is_commented = any(l.lstrip().startswith("--") for l in new_lines if l.strip())
+        status = "toegevoegd (--)" if is_commented else "verwijderd"
+        self.notify(f"Commentaar {status}", timeout=1.2)
+
+class ResultsTable(DataTable):
+    BINDINGS = [
+        *DataTable.BINDINGS,
+        Binding("ctrl+c,super+c", "copy_row", "Copy Row", show=False),
+        Binding("ctrl+a,super+a", "copy_table", "Copy All", show=False),
+    ]
+
+    def action_copy_row(self) -> None:
+        """Copy highlighted row or cell to clipboard."""
+        try:
+            if self.cursor_type == "row" and self.cursor_row is not None:
+                row_data = self.get_row_at(self.cursor_row)
+                text = "\t".join(str(v) if v is not None else "" for v in row_data)
+                copy_to_system_clipboard(text)
+                self.app.copy_to_clipboard(text)
+                self.notify(f"Rij gekopieerd ({len(row_data)} kolommen)", timeout=1.5)
+            elif self.cursor_type == "cell" and self.cursor_coordinate is not None:
+                cell_data = self.get_cell_at(self.cursor_coordinate)
+                text = str(cell_data) if cell_data is not None else ""
+                copy_to_system_clipboard(text)
+                self.app.copy_to_clipboard(text)
+                self.notify("Cel gekopieerd naar klembord", timeout=1.5)
+        except Exception as e:
+            logger.error(f"Error copying table row: {e}")
+
+    def action_copy_table(self) -> None:
+        """Copy entire table with column headers as TSV."""
+        try:
+            lines = []
+            headers = [col.label.plain for col in self.columns.values()]
+            if headers:
+                lines.append("\t".join(headers))
+            for row_idx in range(self.row_count):
+                row_data = self.get_row_at(row_idx)
+                lines.append("\t".join(str(v) if v is not None else "" for v in row_data))
+            text = "\n".join(lines)
+            copy_to_system_clipboard(text)
+            self.app.copy_to_clipboard(text)
+            self.notify(f"Tabel gekopieerd ({self.row_count} rijen)", timeout=1.5)
+        except Exception as e:
+            logger.error(f"Error copying entire table: {e}")
+
 class QueryTab(Vertical):
     def __init__(self, sql: str = "", connection_id: str = None):
         super().__init__()
@@ -449,7 +733,7 @@ class QueryTab(Vertical):
         self.connection_id = connection_id
 
     def compose(self) -> ComposeResult:
-        text_area = TextArea(
+        text_area = SqlTextArea(
             self.initial_sql,
             language="sql",
             id="query-input",
@@ -466,8 +750,10 @@ class QueryTab(Vertical):
             pass
         yield text_area
         with Horizontal():  # Container for table and export sidebar
-            yield DataTable(id="results-table")
+            yield ResultsTable(id="results-table")
             with Vertical(id="export-sidebar"):
+                yield Button("▶ Run", id="btn-run-query", classes="export-btn", variant="primary", tooltip="Run query / selection (Ctrl+Enter)")
+                yield Button("💬 --", id="btn-comment", classes="export-btn", tooltip="Toggle comment (F3 / Cmd+/)")
                 yield Button("↓CSV", id="export-csv", classes="export-btn")
                 yield Button("↓XLSX", id="export-excel", classes="export-btn")
                 yield Button("Abort", id="cancel-query", classes="export-btn", tooltip="Cancel Query", variant="error")
@@ -664,15 +950,16 @@ class AddConnectionDialog(ModalScreen):
 
 class DuckCLI(App):
     ENABLE_MOUSE_SUPPORT = True
+    ALLOW_SELECT = False
     
     CSS = """
     #sidebar { width: 30; background: $surface; }
     #main-content { width: 1fr; }
     #saved-queries-tree, #history-tree { height: auto; max-height: 30%; }
     TabbedContent { width: 100%; height: 1fr; }
-    TextArea { height: 35%; border-bottom: tall $primary; }
-    DataTable { height: 1fr; }
-    #export-sidebar { width: 12; margin-left: 1; background: $panel; border: round $primary; padding: 0; }
+    SqlTextArea, TextArea { height: 35%; border-bottom: tall $primary; }
+    ResultsTable, DataTable { height: 1fr; }
+    #export-sidebar { width: 14; margin-left: 1; background: $panel; border: round $primary; padding: 0; overflow-y: auto; }
     .export-btn { margin: 0; padding: 0; height: 3; width: 100%; }
     #metadata-container {
         height: 1;
@@ -712,12 +999,16 @@ class DuckCLI(App):
     AddConnectionDialog { align: center middle; background: rgba(0, 0, 0, 0.7); }
     """
     BINDINGS = [
-        ("ctrl+enter", "run_query", "Run"),
-        ("ctrl+s", "save_query", "Save Query"),
-        ("ctrl+w", "close_tab", "Close Tab"),
-        ("ctrl+d", "disconnect_db", "Disconnect DB"),
-        ("ctrl+a", "about", "About"),
-        ("ctrl+q", "quit", "Quit")
+        ("ctrl+enter,super+enter", "run_query", "Run"),
+        ("ctrl+s,super+s", "save_query", "Save Query"),
+        ("f3,ctrl+slash,super+slash,ctrl+underscore,super+underscore,ctrl+7,super+7,ctrl+minus,super+minus", "toggle_comment", "Comment (F3)"),
+        ("ctrl+z,super+z", "undo", "Undo"),
+        ("ctrl+y,super+y,shift+ctrl+z,ctrl+shift+z,shift+super+z,super+shift+z", "redo", "Redo"),
+        ("ctrl+w,super+w", "close_tab", "Close Tab"),
+        ("ctrl+d,super+d", "disconnect_db", "Disconnect DB"),
+        ("ctrl+m", "toggle_mouse", "Toggle Mouse"),
+        ("f1", "about", "About"),
+        ("ctrl+q,super+q", "quit", "Quit")
     ]
 
     def __init__(self):
@@ -740,6 +1031,7 @@ class DuckCLI(App):
         yield Footer()
 
     def on_mount(self):
+        self._enable_smooth_mouse()
         self.load_history_list()
         self.load_saved_queries_list()
         self.load_saved_connections()
@@ -938,10 +1230,34 @@ class DuckCLI(App):
             logging.debug("No active tab found")
             return
         tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
-        sql = tab.query_one(TextArea).text.strip()
+        editor = tab.query_one(SqlTextArea)
+
+        # Execute selected text if any is selected (like VS Code / DBeaver)
+        selected_sql = editor.selected_text.strip()
+        sql = selected_sql if selected_sql else editor.text.strip()
         if not sql: 
             logging.debug("No SQL query to execute")
+            self.notify("Geen SQL query om uit te voeren", timeout=1.5)
             return
+
+        is_excel = sql.startswith("-- Excel file:")
+        if not is_excel:
+            non_comment_lines = []
+            for line in sql.splitlines():
+                s = line.strip()
+                if s and not s.startswith("--"):
+                    non_comment_lines.append(s)
+            cleaned_sql = " ".join(non_comment_lines).strip()
+            import re
+            cleaned_sql = re.sub(r'/\*.*?\*/', '', cleaned_sql, flags=re.DOTALL).strip()
+            if not cleaned_sql:
+                self.notify("Query is uitgecommentarieerd (--), niet uitgevoerd", timeout=2.0)
+                meta = tab.query_one("#metadata-bar")
+                meta.update("Overgeslagen (alleen commentaar)")
+                return
+
+        if selected_sql:
+            self.notify("Geselecteerde query uitvoeren...", timeout=1.0)
 
         logging.debug(f"Executing query: {sql[:100]}{'...' if len(sql) > 100 else ''}")
         
@@ -1204,6 +1520,59 @@ class DuckCLI(App):
                 error_sql = f"-- Error opening file: {file_path.name}\n-- {str(e)}"
                 await self.add_new_tab(f"❌ {file_path.name}", error_sql, run=False)
 
+    def copy_to_clipboard(self, text: str) -> None:
+        copy_to_system_clipboard(text)
+        super().copy_to_clipboard(text)
+
+    @property
+    def clipboard(self) -> str:
+        text = get_system_clipboard()
+        if text:
+            self._clipboard = text
+            return text
+        return super().clipboard
+
+    def action_toggle_comment(self):
+        """Toggle SQL comments in the currently active tab like VS Code."""
+        try:
+            tabs = self.query_one("#tabs", TabbedContent)
+            if not tabs.active:
+                return
+            tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
+            editor = tab.query_one(SqlTextArea)
+            editor.action_toggle_comment()
+            editor.focus()
+        except Exception as e:
+            logger.error(f"Error toggling comment: {e}")
+
+    def _enable_smooth_mouse(self):
+        """Enable clean, responsive mouse tracking (clicks & selection drag without motion lag)."""
+        if hasattr(self, "_driver") and self._driver:
+            # 1000h: basic clicks, 1002h: button event (clicks + drags for selection), 1006h: SGR extended coordinates
+            # Disable 1003h (any-event motion tracking) to prevent cursor lag and weird cursor shapes in terminal
+            self._driver.write("\x1b[?1000h\x1b[?1003l\x1b[?1002h\x1b[?1006h\x1b[?1015h")
+            self._driver.flush()
+
+    def _disable_all_mouse(self):
+        """Disable all terminal mouse tracking (giving 100% native macOS terminal selection like nano)."""
+        if hasattr(self, "_driver") and self._driver:
+            self._driver.write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l")
+            self._driver.flush()
+
+    def action_toggle_mouse(self):
+        """Toggle mouse tracking on/off (allowing native terminal selection like nano)."""
+        if not hasattr(self, "_mouse_reporting_enabled"):
+            self._mouse_reporting_enabled = True
+
+        if self._mouse_reporting_enabled:
+            self._disable_all_mouse()
+            self._mouse_reporting_enabled = False
+            self.notify("Native terminal selectie actief (zoals in nano). Druk nogmaals op Ctrl+M voor TUI muis.", title="Muis-modus", timeout=3)
+        else:
+            self._enable_smooth_mouse()
+            self._mouse_reporting_enabled = True
+            self.notify("TUI muis-modus actief (knoppen & tabs klikbaar).", title="Muis-modus", timeout=2)
+
     def action_about(self): self.push_screen(AboutScreen())
     def on_click(self, event: Click) -> None:
         """Handle clicks on tab close buttons (✕ in tab titles)."""
@@ -1219,6 +1588,26 @@ class DuckCLI(App):
                 pane_id = ContentTab.sans_prefix(widget.id)
                 self.query_one("#tabs", TabbedContent).remove_pane(pane_id)
                 event.stop()
+
+    def action_undo(self):
+        """Undo last action in current query editor."""
+        try:
+            tabs = self.query_one("#tabs", TabbedContent)
+            tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
+            editor = tab.query_one(SqlTextArea)
+            editor.action_undo()
+        except Exception as e:
+            logger.error(f"Error executing undo: {e}")
+
+    def action_redo(self):
+        """Redo last undone action in current query editor."""
+        try:
+            tabs = self.query_one("#tabs", TabbedContent)
+            tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
+            editor = tab.query_one(SqlTextArea)
+            editor.action_redo()
+        except Exception as e:
+            logger.error(f"Error executing redo: {e}")
 
     def action_close_tab(self):
         tabs = self.query_one("#tabs", TabbedContent)
@@ -1268,6 +1657,13 @@ class DuckCLI(App):
 
     def on_button_pressed(self, event: Button.Pressed):
         """Handle button presses"""
+        if event.button.id == "btn-run-query":
+            self.run_worker(self.action_run_query())
+            return
+        elif event.button.id == "btn-comment":
+            self.action_toggle_comment()
+            return
+
         if event.button.id in ["export-csv", "export-excel"]:
             # Find the current tab and its data
             tabs = self.query_one("#tabs", TabbedContent)
