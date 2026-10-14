@@ -1,37 +1,45 @@
 """
 DuckCLI Features:
-- Async Execution: Query's draaien in een aparte thread; interface hangt niet.
-- Metadata Footer: Toont uitvoeringstijd en aantal resultaten onder de tabel.
-- Multi-Tab Support: Open meerdere bestanden of query's tegelijk.
-- File Filtering: DirectoryTree toont alleen ondersteunde bestanden.
+- Async Execution: Queries run in a separate thread; UI does not freeze.
+- Metadata Footer: Displays execution time and row counts under table.
+- Multi-Tab Support: Open multiple files or queries simultaneously.
+- File Filtering: DirectoryTree shows only supported files.
 - Save Queries: Save queries with names to openduck.json
 - History: Store query history in openduck.json
 """
 
-import logging
-import datetime as dt_module
-from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical, Middle, ScrollableContainer
-from textual.widgets import (
-    Header, Footer, TextArea, DataTable, DirectoryTree,
-    Static, Input, Button, TabbedContent, TabPane, ListView, ListItem, Label,
-    Tree, Select
-)
-from textual.events import MouseEvent, Click, MouseDown, MouseMove, MouseUp
-from textual.screen import ModalScreen
-from textual.binding import Binding
-from textual.document._document import Selection
-from pathlib import Path
-from datetime import datetime
-from typing import Iterable, List, Any, Optional
-import duckdb
-import os
 import asyncio
-import time
+import csv
+from datetime import datetime
 import json
-import resource
-import sys
+import logging
+import os
+from pathlib import Path
+import random
+import re
 import subprocess
+import sys
+import time
+from typing import Iterable, List, Any, Optional
+
+try:
+    import resource
+except ImportError:
+    resource = None
+
+from rich.text import Text
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, Middle
+from textual.events import Click, MouseDown, MouseMove, MouseUp
+from textual.screen import ModalScreen
+from textual.widgets import (
+    Button, DataTable, DirectoryTree, Footer, Header, Input, Select,
+    Static, TabbedContent, TabPane, Tree, TextArea
+)
+from textual.widgets.text_area import Selection
+from textual.widgets._tabbed_content import ContentTab
+import duckdb
 
 # Configure logging to write to current directory with improved format
 logging.basicConfig(
@@ -41,13 +49,13 @@ logging.basicConfig(
     filemode='a'
 )
 logger = logging.getLogger(__name__)
-import random
 
 # =====================
 # Config & Helpers
 # =====================
 CWD = Path(os.getcwd())
 CONFIG_FILE = CWD / "openduck.json"
+MAX_UI_ROWS = 10000
 DUCKDB_EXTENSIONS = {
     ".parquet", ".arrow", ".duckdb", ".csv", ".csv.gz",
     ".json", ".jsonl", ".sqlite", ".sqlite3", ".db", ".xlsx", ".xls"
@@ -61,30 +69,37 @@ def sql_for_file(path: Path) -> str:
     if s == ".duckdb": return f"ATTACH '{p}' AS other;\nSHOW TABLES;"
     if s in {".sqlite", ".sqlite3", ".db"}:
         return f"INSTALL sqlite;\nLOAD sqlite;\nATTACH '{p}' AS sqlite_db (TYPE SQLITE);\nSHOW TABLES FROM sqlite_db;"
-    if s in {".xlsx", ".xls"}: 
-        # Excel files will be loaded via pandas and registered as DuckDB table
-        table_name = path.stem.replace(' ', '_').replace('-', '_')
-        return f"-- Excel file: {p}\nSELECT * FROM {table_name} LIMIT 100;"
+    if s in {".xlsx", ".xls"}:
+        table_name = re.sub(r'\W|^(?=\d)', '_', path.stem.replace(' ', '_').replace('-', '_'))
+        return f"SELECT * FROM {table_name} LIMIT 100;"
     if s in {".csv", ".csv.gz"}: return f"SELECT * FROM read_csv_auto('{p}') LIMIT 100;"
     if s in {".json", ".jsonl"}: return f"SELECT * FROM read_json_auto('{p}') LIMIT 100;"
     return f"SELECT * FROM '{p}' LIMIT 100;"
 
 def load_config():
-    """Load config from openduck.json, create if doesn't exist"""
+    """Load config from openduck.json, create if doesn't exist or is invalid"""
     if CONFIG_FILE.exists():
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-            if "connections" not in config:
-                config["connections"] = []
-            return config
-    else:
-        default_config = {
-            "history": [],
-            "saved_queries": [],
-            "connections": []
-        }
-        save_config(default_config)
-        return default_config
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                if isinstance(config, dict):
+                    if "connections" not in config:
+                        config["connections"] = []
+                    if "history" not in config:
+                        config["history"] = []
+                    if "saved_queries" not in config:
+                        config["saved_queries"] = []
+                    return config
+        except Exception as e:
+            logger.error(f"Failed to read config file, falling back to default: {e}")
+
+    default_config = {
+        "history": [],
+        "saved_queries": [],
+        "connections": []
+    }
+    save_config(default_config)
+    return default_config
 
 def save_config(config):
     """Save config to openduck.json"""
@@ -92,16 +107,17 @@ def save_config(config):
         json.dump(config, f, indent=2, ensure_ascii=False)
 
 def add_to_history(sql: str):
-    """Add a query to history in the config file"""
+    """Add a query to history in the config file, capped at the last 200 queries."""
     config = load_config()
     timestamp = datetime.now().isoformat()
     config["history"].append({
         "sql": sql.strip(),
         "timestamp": timestamp
     })
-    # Unlimited history - no limit applied
+    # Keep only the last 200 queries to prevent boundless file growth
+    config["history"] = config["history"][-200:]
     save_config(config)
-    return config  # Return updated config for potential use by caller
+    return config
 
 def save_query(name: str, sql: str):
     """Save a query with a name to the config file"""
@@ -317,9 +333,8 @@ LOLCAT_COLORS = [
     "#8800ff", "#cc00ff", "#ff00ff", "#ff0088",
 ]
 
-def lolcat(text: str) -> str:
+def lolcat(text: str) -> Text:
     """Apply rainbow colors to text, Rich markup style."""
-    from rich.text import Text
     rich_text = Text(text)
     lines = text.split("\n")
     pos = 0
@@ -431,7 +446,6 @@ class DatabaseTree(Vertical):
         
     def _ensure_add_node(self):
         """Make sure the '+ Add connection' node is always the last leaf."""
-        # Remove existing add-node if present
         for child in list(self.original_tree.root.children):
             if child.data and child.data.get("type") == "add_connection":
                 child.remove()
@@ -442,6 +456,8 @@ class DatabaseTree(Vertical):
         type_icon = "\U0001f42c" if conn_info["type"] == "mysql" else "\U0001f537"
         label = f"{type_icon} {conn_info['display_name']}"
         self.remove_connection_node(conn_id)
+        # Store tables in connection info for table filtering
+        conn_info["tables"] = tables or []
         self.connections_data[conn_id] = conn_info
         conn_node = self.original_tree.root.add(
             label,
@@ -477,35 +493,31 @@ class DatabaseTree(Vertical):
             type_icon = "\U0001f42c" if conn_info["type"] == "mysql" else "\U0001f537"
             label = f"{type_icon} {conn_info['display_name']}"
 
-            # Filter tables based on search term (case insensitive)
             all_tables = conn_info.get("tables", [])
             if search_term:
-                # Case-insensitive search
                 filtered_tables = [table for table in all_tables if search_term in table.lower()]
             else:
-                # Show all tables when search is empty
                 filtered_tables = all_tables
 
-            # Always add the connection node, but with filtered tables
             conn_node = self.original_tree.root.add(
                 label,
                 data={"type": "connection", "conn_id": conn_id},
                 expand=True,
             )
             
-            # Add tables based on filtering
-            for table_name in sorted(filtered_tables):
-                conn_node.add_leaf(
-                    f"  {table_name}",
-                    data={"type": "table", "conn_id": conn_id, "table": table_name, "database": conn_info["database"]},
-                )
-            
-            # If search term exists but no tables match, add a "No matches" indicator
-            if search_term and not filtered_tables:
+            if filtered_tables:
+                for table_name in sorted(filtered_tables):
+                    conn_node.add_leaf(
+                        f"  {table_name}",
+                        data={"type": "table", "conn_id": conn_id, "table": table_name, "database": conn_info["database"]},
+                    )
+            elif search_term:
                 conn_node.add_leaf(
                     "  No matching tables",
                     data={"type": "no_match", "conn_id": conn_id},
                 )
+            else:
+                conn_node.add_leaf("Loading...", data={"type": "loading", "conn_id": conn_id})
 
         self._ensure_add_node()
         self.original_tree.root.expand()
@@ -522,22 +534,22 @@ for b in TextArea.BINDINGS:
     if b.action == "cursor_line_start":
         _sql_text_area_bindings.append(Binding("home", "cursor_line_start", "Cursor line start", show=False))
     elif b.action == "select_all":
-        _sql_text_area_bindings.append(Binding("f7,ctrl+a,super+a", "select_all", "Select all", show=False))
+        _sql_text_area_bindings.append(Binding("f7,ctrl+a,super+a,cmd+a,command+a", "select_all", "Select all", show=False))
     elif b.action == "copy":
-        _sql_text_area_bindings.append(Binding("ctrl+c,super+c", "copy", "Copy", show=False))
+        _sql_text_area_bindings.append(Binding("ctrl+c,super+c,cmd+c,command+c", "copy", "Copy", show=False))
     elif b.action == "paste":
-        _sql_text_area_bindings.append(Binding("ctrl+v,super+v", "paste", "Paste", show=False))
+        _sql_text_area_bindings.append(Binding("ctrl+v,super+v,cmd+v,command+v", "paste", "Paste", show=False))
     elif b.action == "cut":
-        _sql_text_area_bindings.append(Binding("ctrl+x,super+x", "cut", "Cut", show=False))
+        _sql_text_area_bindings.append(Binding("ctrl+x,super+x,cmd+x,command+x", "cut", "Cut", show=False))
     elif b.action == "undo":
-        _sql_text_area_bindings.append(Binding("ctrl+z,super+z", "undo", "Undo", show=False))
+        _sql_text_area_bindings.append(Binding("ctrl+z,super+z,cmd+z,command+z", "undo", "Undo", show=False))
     elif b.action == "redo":
-        _sql_text_area_bindings.append(Binding("ctrl+y,super+y,shift+ctrl+z,ctrl+shift+z,shift+super+z,super+shift+z", "redo", "Redo", show=False))
+        _sql_text_area_bindings.append(Binding("ctrl+y,super+y,cmd+y,command+y,shift+ctrl+z,ctrl+shift+z,shift+super+z,super+shift+z,shift+cmd+z,cmd+shift+z,shift+command+z,command+shift+z", "redo", "Redo", show=False))
     else:
         _sql_text_area_bindings.append(b)
 
 _sql_text_area_bindings.append(
-    Binding("f3,ctrl+slash,super+slash,ctrl+underscore,super+underscore,ctrl+7,super+7,ctrl+minus,super+minus", "toggle_comment", "Comment", show=False)
+    Binding("f3,ctrl+slash,super+slash,cmd+slash,command+slash,ctrl+underscore,super+underscore,cmd+underscore,command+underscore,ctrl+7,super+7,ctrl+minus,super+minus", "toggle_comment", "Comment", show=False)
 )
 
 class SqlTextArea(TextArea):
@@ -554,7 +566,6 @@ class SqlTextArea(TextArea):
             return
         col = max(0, min(col, len(line)))
 
-        import re
         word_char_regex = re.compile(r'\w')
         if col < len(line) and not word_char_regex.match(line[col]) and col > 0 and word_char_regex.match(line[col - 1]):
             col -= 1
@@ -682,6 +693,29 @@ class SqlTextArea(TextArea):
         status = "toegevoegd (--)" if is_commented else "verwijderd"
         self.notify(f"Commentaar {status}", timeout=1.2)
 
+    def on_key(self, event) -> None:
+        key = (event.key or "").lower()
+        if key in ("super+z", "cmd+z", "command+z", "ctrl+z"):
+            self.action_undo()
+            event.stop()
+            event.prevent_default()
+        elif key in (
+            "super+shift+z", "shift+super+z", "cmd+shift+z", "shift+cmd+z",
+            "command+shift+z", "shift+command+z", "ctrl+shift+z", "shift+ctrl+z",
+            "super+y", "cmd+y", "command+y", "ctrl+y"
+        ):
+            self.action_redo()
+            event.stop()
+            event.prevent_default()
+
+    def action_undo(self) -> None:
+        """Undo last action in editor."""
+        self.undo()
+
+    def action_redo(self) -> None:
+        """Redo last undone action in editor."""
+        self.redo()
+
 class ResultsTable(DataTable):
     BINDINGS = [
         *DataTable.BINDINGS,
@@ -738,12 +772,12 @@ class QueryTab(Vertical):
             language="sql",
             id="query-input",
             theme="vscode_dark",
-            soft_wrap=False, # Uitgezet om de ValueError crash te voorkomen
+            soft_wrap=False, # Disabled to prevent crash with long lines
             read_only=False,
             tab_behavior="indent",
             show_line_numbers=True
         )
-        # Forceer SQL highlighting
+        # Force SQL highlighting
         try:
             text_area.language = "sql"
         except Exception:
@@ -764,11 +798,11 @@ class QueryTab(Vertical):
     def on_mount(self):
         t = self.query_one(DataTable)
         t.cursor_type, t.zebra_stripes = "row", True
-        # Gebruik een kleine vertraging voor focus om crashes te voorkomen
+        # Use slight delay for focus to allow UI to settle
         self.set_timer(0.1, self.safe_focus)
 
     def safe_focus(self):
-        """Focus de editor op een veilige manier."""
+        """Focus the editor safely."""
         try:
             editor = self.query_one("#query-input")
             editor.move_cursor((0, 0))
@@ -825,11 +859,8 @@ class ExportDialog(ModalScreen):
     def on_mount(self):
         # Pre-populate filename based on query content
         query_text = self.tab.query_one(TextArea).text.strip()
-        import re
-        # Extract table name from query if possible
         table_match = re.search(r'FROM\s+(\w+)', query_text, re.IGNORECASE)
         base_name = table_match.group(1) if table_match else "query_result"
-        # Sanitize filename
         base_name = re.sub(r'[^\w\-_]', '_', base_name)
         extension = ".csv" if self.export_type == "csv" else ".xlsx"
         default_filename = f"{base_name}{extension}"
@@ -837,47 +868,61 @@ class ExportDialog(ModalScreen):
         self.query_one("#export-filename").value = default_filename
         self.query_one("#export-filename").focus()
 
-    def on_button_pressed(self, event: Button.Pressed):
+    def export_to_csv(self, filename: str) -> tuple[bool, str]:
+        """Export table data to CSV file."""
+        try:
+            filepath = CWD / filename
+            with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(self.tab.column_names)
+                for row in self.tab.full_data:
+                    writer.writerow(row)
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to export CSV: {e}")
+            return False, str(e)
+
+    def export_to_excel(self, filename: str) -> tuple[bool, str]:
+        """Export table data to Excel file."""
+        try:
+            import pandas as pd
+        except ImportError:
+            return False, "pandas is not installed (pip install pandas openpyxl)"
+        try:
+            import openpyxl  # noqa: F401
+        except ImportError:
+            return False, "openpyxl is not installed (pip install openpyxl)"
+        try:
+            filepath = CWD / filename
+            df = pd.DataFrame(self.tab.full_data, columns=self.tab.column_names)
+            df.to_excel(filepath, index=False)
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to export Excel: {e}")
+            return False, str(e)
+
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-cancel":
             self.dismiss()
         elif event.button.id == "btn-export":
-            filename = self.query_one("#export-filename", Input).value
-            if filename.strip():
-                if self.export_type == "csv":
-                    self.export_to_csv(filename)
-                else:  # excel
-                    self.export_to_excel(filename)
-                self.dismiss({"exported": True, "filename": filename})
-            else:
+            filename = self.query_one("#export-filename", Input).value.strip()
+            if not filename:
                 self.query_one("#export-filename").value = ""
                 self.query_one("#export-filename").focus()
+                return
 
-    def export_to_csv(self, filename: str):
-        """Export table data to CSV file"""
-        import csv
-        filepath = CWD / filename
-        
-        with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
-            # Write headers
-            writer.writerow(self.tab.column_names)
-            # Write data rows
-            for row in self.tab.full_data:
-                writer.writerow(row)
+            event.button.disabled = True
+            if self.export_type == "csv":
+                success, error_msg = await asyncio.to_thread(self.export_to_csv, filename)
+            else:
+                success, error_msg = await asyncio.to_thread(self.export_to_excel, filename)
 
-    def export_to_excel(self, filename: str):
-        """Export table data to Excel file"""
-        try:
-            import pandas as pd
-            filepath = CWD / filename
-            
-            # Create DataFrame from the data
-            df = pd.DataFrame(self.tab.full_data, columns=self.tab.column_names)
-            # Write to Excel
-            df.to_excel(filepath, index=False)
-        except ImportError:
-            # Show error if pandas not available
-            pass
+            event.button.disabled = False
+            if success:
+                self.app.notify(f"Geëxporteerd naar {filename}", timeout=2.0)
+                self.dismiss({"exported": True, "filename": filename})
+            else:
+                self.app.notify(f"Export mislukt: {error_msg}", severity="error", timeout=4.0)
 
 class AddConnectionDialog(ModalScreen):
     """Modal dialog to add a MySQL or MSSQL connection."""
@@ -953,9 +998,13 @@ class DuckCLI(App):
     ALLOW_SELECT = False
     
     CSS = """
-    #sidebar { width: 30; background: $surface; }
+    #sidebar { width: 30; height: 100%; background: $surface; }
+    #files { height: 1fr; min-height: 6; }
+    #db-tree { height: 1fr; min-height: 8; }
+    #db-tree-inner { height: 1fr; }
+    #saved-queries-tree { height: 1fr; min-height: 5; }
+    #history-tree { height: 1fr; min-height: 5; }
     #main-content { width: 1fr; }
-    #saved-queries-tree, #history-tree { height: auto; max-height: 30%; }
     TabbedContent { width: 100%; height: 1fr; }
     SqlTextArea, TextArea { height: 35%; border-bottom: tall $primary; }
     ResultsTable, DataTable { height: 1fr; }
@@ -990,25 +1039,23 @@ class DuckCLI(App):
     #export-modal { width: 50; height: auto; background: $surface; border: tall $primary; padding: 2; }
     #export-modal-title { text-style: bold; margin-bottom: 1; text-align: center; }
     #export-filename { margin-bottom: 1; }
-    #db-tree { height: auto; max-height: 40%; }
     #db-search-input { margin-bottom: 1; }
-    #db-tree-inner { height: 1fr; }
     #conn-dialog { width: 60; height: auto; background: $surface; border: tall $primary; padding: 2; }
     #conn-dialog-title { text-style: bold; margin-bottom: 1; text-align: center; }
     #conn-status { height: 1; margin-top: 1; }
     AddConnectionDialog { align: center middle; background: rgba(0, 0, 0, 0.7); }
     """
     BINDINGS = [
-        ("ctrl+enter,super+enter", "run_query", "Run"),
-        ("ctrl+s,super+s", "save_query", "Save Query"),
-        ("f3,ctrl+slash,super+slash,ctrl+underscore,super+underscore,ctrl+7,super+7,ctrl+minus,super+minus", "toggle_comment", "Comment (F3)"),
-        ("ctrl+z,super+z", "undo", "Undo"),
-        ("ctrl+y,super+y,shift+ctrl+z,ctrl+shift+z,shift+super+z,super+shift+z", "redo", "Redo"),
-        ("ctrl+w,super+w", "close_tab", "Close Tab"),
-        ("ctrl+d,super+d", "disconnect_db", "Disconnect DB"),
+        ("ctrl+enter,super+enter,cmd+enter,command+enter", "run_query", "Run"),
+        ("ctrl+s,super+s,cmd+s,command+s", "save_query", "Save Query"),
+        ("f3,ctrl+slash,super+slash,cmd+slash,command+slash,ctrl+underscore,super+underscore,cmd+underscore,command+underscore,ctrl+7,super+7,ctrl+minus,super+minus", "toggle_comment", "Comment (F3)"),
+        ("ctrl+z,super+z,cmd+z,command+z", "undo", "Undo"),
+        ("ctrl+y,super+y,cmd+y,command+y,shift+ctrl+z,ctrl+shift+z,shift+super+z,super+shift+z,shift+cmd+z,cmd+shift+z,shift+command+z,command+shift+z", "redo", "Redo"),
+        ("ctrl+w,super+w,cmd+w,command+w", "close_tab", "Close Tab"),
+        ("ctrl+d,super+d,cmd+d,command+d", "disconnect_db", "Disconnect DB"),
         ("ctrl+m", "toggle_mouse", "Toggle Mouse"),
         ("f1", "about", "About"),
-        ("ctrl+q,super+q", "quit", "Quit")
+        ("ctrl+q,super+q,cmd+q,command+q", "quit", "Quit")
     ]
 
     def __init__(self):
@@ -1031,7 +1078,7 @@ class DuckCLI(App):
         yield Footer()
 
     def on_mount(self):
-        self._enable_smooth_mouse()
+        # Let Textual initialize its standard mouse driver cleanly without raw ANSI overrides
         self.load_history_list()
         self.load_saved_queries_list()
         self.load_saved_connections()
@@ -1045,6 +1092,8 @@ class DuckCLI(App):
 
     def update_memory_info(self):
         """Update the memory info in the active tab's footer bar."""
+        if resource is None:
+            return
         try:
             mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             if sys.platform == 'darwin':
@@ -1081,7 +1130,7 @@ class DuckCLI(App):
             db_tree.update_tables(conn_id, tables)
         except Exception as e:
             db_tree.remove_connection_node(conn_id)
-            err_node = db_tree.root.add(
+            err_node = db_tree.original_tree.root.add(
                 f"[red]ERR: {conn_info['display_name']}[/red]",
                 data={"type": "error", "conn_id": conn_id},
             )
@@ -1158,7 +1207,7 @@ class DuckCLI(App):
     def action_disconnect_db(self):
         try:
             db_tree = self.query_one("#db-tree", DatabaseTree)
-            node = db_tree.cursor_node
+            node = db_tree.original_tree.cursor_node
             if node and node.data:
                 conn_id = node.data.get("conn_id")
                 if conn_id:
@@ -1224,6 +1273,20 @@ class DuckCLI(App):
         else:
             return f"❌ Error loading file: {file_path}\n\nDetails: {str(e)}"
 
+    async def _load_and_register_excel(self, file_path: Path) -> str:
+        """Load Excel file using pandas in a worker thread and register as DuckDB table."""
+        stem = file_path.stem.replace(' ', '_').replace('-', '_')
+        table_name = re.sub(r'\W|^(?=\d)', '_', stem)
+
+        def do_register():
+            import pandas as pd
+            df = pd.read_excel(file_path)
+            self.con.register(table_name, df)
+            logging.debug(f"Registered Excel file '{file_path}' as table '{table_name}' ({len(df)} rows)")
+
+        await asyncio.to_thread(do_register)
+        return table_name
+
     async def action_run_query(self):
         tabs = self.query_one("#tabs", TabbedContent)
         if not tabs.active: 
@@ -1240,21 +1303,18 @@ class DuckCLI(App):
             self.notify("Geen SQL query om uit te voeren", timeout=1.5)
             return
 
-        is_excel = sql.startswith("-- Excel file:")
-        if not is_excel:
-            non_comment_lines = []
-            for line in sql.splitlines():
-                s = line.strip()
-                if s and not s.startswith("--"):
-                    non_comment_lines.append(s)
-            cleaned_sql = " ".join(non_comment_lines).strip()
-            import re
-            cleaned_sql = re.sub(r'/\*.*?\*/', '', cleaned_sql, flags=re.DOTALL).strip()
-            if not cleaned_sql:
-                self.notify("Query is uitgecommentarieerd (--), niet uitgevoerd", timeout=2.0)
-                meta = tab.query_one("#metadata-bar")
-                meta.update("Overgeslagen (alleen commentaar)")
-                return
+        non_comment_lines = []
+        for line in sql.splitlines():
+            s = line.strip()
+            if s and not s.startswith("--"):
+                non_comment_lines.append(s)
+        cleaned_sql = " ".join(non_comment_lines).strip()
+        cleaned_sql = re.sub(r'/\*.*?\*/', '', cleaned_sql, flags=re.DOTALL).strip()
+        if not cleaned_sql:
+            self.notify("Query is uitgecommentarieerd (--), niet uitgevoerd", timeout=2.0)
+            meta = tab.query_one("#metadata-bar")
+            meta.update("Overgeslagen (alleen commentaar)")
+            return
 
         if selected_sql:
             self.notify("Geselecteerde query uitvoeren...", timeout=1.0)
@@ -1282,62 +1342,37 @@ class DuckCLI(App):
         def execute():
             start = time.perf_counter()
             logging.debug("Executing SQL query in thread")
-            
-            # Check if this is an Excel file query
-            if sql.startswith("-- Excel file:"):
-                try:
-                    import pandas as pd
-                    # Extract file path from comment
-                    file_path = sql.split("Excel file: ")[1].split("\n")[0].strip()
-                    table_name = Path(file_path).stem.replace(' ', '_').replace('-', '_')
-                    logging.debug(f"Loading Excel file via pandas: {file_path} as table '{table_name}'")
-                    
-                    # Read Excel file with pandas
-                    df = pd.read_excel(file_path)
-                    
-                    # Register as DuckDB table
-                    self.con.register(table_name, df)
-                    logging.debug(f"Registered Excel data as table '{table_name}': {len(df)} rows, {len(df.columns)} columns")
-                    
-                    # Now execute the actual SELECT query
-                    actual_sql = sql.split("\n")[1].strip()
-                    logging.debug(f"Executing query on Excel table: {actual_sql}")
-                    res = self.con.execute(actual_sql)
-                    cols = [d[0] for d in res.description]
-                    data = [list(r) for r in res.fetchall()]
-                    duration = time.perf_counter() - start
-                    logging.debug(f"Excel query executed: {len(data)} rows, {len(cols)} columns")
-                    return data, cols, None, duration
-                except Exception as e:
-                    logging.error(f"Error loading Excel file: {str(e)}")
-                    raise
-            
+
             if conn_meta and conn_meta["type"] == "mssql":
                 mssql_conn = conn_meta["connection"]
                 cursor = mssql_conn.cursor()
                 cursor.execute(sql)
                 if not cursor.description:
                     logging.debug("Query returned no results (MS SQL)")
-                    return [], ["Info"], None, time.perf_counter() - start
+                    return [], ["Info"], None, time.perf_counter() - start, False
                 cols = [d[0] for d in cursor.description]
-                data = [list(r) for r in cursor.fetchall()]
-                logging.debug(f"MS SQL query executed: {len(data)} rows, {len(cols)} columns")
-                return data, cols, None, time.perf_counter() - start
+                raw_data = cursor.fetchmany(MAX_UI_ROWS + 1)
+                is_truncated = len(raw_data) > MAX_UI_ROWS
+                data = [list(r) for r in raw_data[:MAX_UI_ROWS]]
+                logging.debug(f"MS SQL query executed: {len(data)} rows (truncated={is_truncated}), {len(cols)} columns")
+                return data, cols, None, time.perf_counter() - start, is_truncated
             else:
                 cursor = self.con.cursor()
                 res = cursor.execute(sql)
                 if not res.description:
                     duration = time.perf_counter() - start
                     logging.debug("Query returned no results (DuckDB)")
-                    return [], ["Info"], [["Success"]], duration
+                    return [], ["Info"], [["Success"]], duration, False
                 cols = [d[0] for d in res.description]
-                data = [list(r) for r in res.fetchall()]
+                raw_data = res.fetchmany(MAX_UI_ROWS + 1)
+                is_truncated = len(raw_data) > MAX_UI_ROWS
+                data = [list(r) for r in raw_data[:MAX_UI_ROWS]]
                 duration = time.perf_counter() - start
-                logging.debug(f"DuckDB query executed: {len(data)} rows, {len(cols)} columns")
-                return data, cols, None, duration
+                logging.debug(f"DuckDB query executed: {len(data)} rows (truncated={is_truncated}), {len(cols)} columns")
+                return data, cols, None, duration, is_truncated
 
         try:
-            data, cols, _, duration = await asyncio.to_thread(execute)
+            data, cols, _, duration, is_truncated = await asyncio.to_thread(execute)
             tab.column_names = cols
             tab.full_data = data
             tab.col_states = {i: {"filter": "", "sort": None} for i in range(len(cols))}
@@ -1346,7 +1381,8 @@ class DuckCLI(App):
             conn_label = ""
             if conn_meta:
                 conn_label = f" | via {conn_meta['type'].upper()}"
-            meta.update(f"Rows: {len(data)} | Time: {duration:.4f}s{conn_label} | Finished: {datetime.now().strftime('%H:%M:%S')}")
+            rows_label = f"{MAX_UI_ROWS}+ (truncated)" if is_truncated else str(len(data))
+            meta.update(f"Rows: {rows_label} | Time: {duration:.4f}s{conn_label} | Finished: {datetime.now().strftime('%H:%M:%S')}")
             logging.debug(f"Query completed successfully: {len(data)} rows in {duration:.4f}s")
         except asyncio.CancelledError:
             logging.debug("Query was cancelled")
@@ -1357,13 +1393,10 @@ class DuckCLI(App):
             tbl.add_column("Error")
             
             # Try to extract file path from the SQL for better error messages
-            import re
             file_path = ""
-            # Check for read_csv_auto, read_json_auto, or direct file references
             csv_match = re.search(r"read_csv_auto\('([^']+)'\)", sql)
             json_match = re.search(r"read_json_auto\('([^']+)'\)", sql)
             file_match = re.search(r"FROM '([^']+)'", sql)
-            excel_match = re.search(r"Excel file: ([^\n]+)", sql)
             
             if csv_match:
                 file_path = csv_match.group(1)
@@ -1371,10 +1404,7 @@ class DuckCLI(App):
                 file_path = json_match.group(1)
             elif file_match:
                 file_path = file_match.group(1)
-            elif excel_match:
-                file_path = excel_match.group(1)
             
-            # Use classified error message if available
             error_message = self._classify_file_error(e, file_path) if file_path else str(e)
             
             tbl.add_row(error_message)
@@ -1447,12 +1477,15 @@ class DuckCLI(App):
                 data = [r for r in data if f in str(r[i]).lower()]
                 logging.debug(f"Applied filter on column {i}: {initial_count} -> {len(data)} rows")
         
-        # Apply sorting
+        # Apply sorting: sort None values safely without TypeError
         sort_applied = False
         for i, s in tab.col_states.items():
             if s["sort"]:
                 initial_count = len(data)
-                data.sort(key=lambda x: x[i] if x[i] is not None else "", reverse=(s["sort"]=="desc"))
+                try:
+                    data.sort(key=lambda x: (x[i] is None, x[i]), reverse=(s["sort"] == "desc"))
+                except TypeError:
+                    data.sort(key=lambda x: (x[i] is None, str(x[i])), reverse=(s["sort"] == "desc"))
                 sort_applied = True
                 logging.debug(f"Applied sort on column {i} ({tab.column_names[i] if i < len(tab.column_names) else 'N/A'}): {s['sort']}, {initial_count} rows sorted")
                 break
@@ -1512,12 +1545,17 @@ class DuckCLI(App):
         file_path = Path(event.path)
         if is_duckdb_file(file_path):
             try:
-                sql = sql_for_file(file_path)
+                suffix = file_path.suffix.lower()
+                if suffix in {".xlsx", ".xls"}:
+                    table_name = await self._load_and_register_excel(file_path)
+                    sql = f"SELECT * FROM {table_name} LIMIT 100;"
+                else:
+                    sql = sql_for_file(file_path)
                 await self.add_new_tab(file_path.name, sql, run=True)
             except Exception as e:
                 logging.error(f"Error opening file {file_path}: {str(e)}")
-                # Show error in a new tab
-                error_sql = f"-- Error opening file: {file_path.name}\n-- {str(e)}"
+                error_msg = self._classify_file_error(e, str(file_path))
+                error_sql = f"-- Error opening file: {file_path.name}\n-- {error_msg}"
                 await self.add_new_tab(f"❌ {file_path.name}", error_sql, run=False)
 
     def copy_to_clipboard(self, text: str) -> None:
@@ -1546,15 +1584,13 @@ class DuckCLI(App):
             logger.error(f"Error toggling comment: {e}")
 
     def _enable_smooth_mouse(self):
-        """Enable clean, responsive mouse tracking (clicks & selection drag without motion lag)."""
+        """Re-enable standard Textual mouse tracking."""
         if hasattr(self, "_driver") and self._driver:
-            # 1000h: basic clicks, 1002h: button event (clicks + drags for selection), 1006h: SGR extended coordinates
-            # Disable 1003h (any-event motion tracking) to prevent cursor lag and weird cursor shapes in terminal
-            self._driver.write("\x1b[?1000h\x1b[?1003l\x1b[?1002h\x1b[?1006h\x1b[?1015h")
+            self._driver.write("\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h")
             self._driver.flush()
 
     def _disable_all_mouse(self):
-        """Disable all terminal mouse tracking (giving 100% native macOS terminal selection like nano)."""
+        """Disable all terminal mouse tracking (giving 100% native terminal selection like nano)."""
         if hasattr(self, "_driver") and self._driver:
             self._driver.write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l")
             self._driver.flush()
@@ -1574,9 +1610,9 @@ class DuckCLI(App):
             self.notify("TUI muis-modus actief (knoppen & tabs klikbaar).", title="Muis-modus", timeout=2)
 
     def action_about(self): self.push_screen(AboutScreen())
+
     def on_click(self, event: Click) -> None:
         """Handle clicks on tab close buttons (✕ in tab titles)."""
-        from textual.widgets._tabbed_content import ContentTab
         try:
             widget, _ = self.screen.get_widget_at(event.screen_x, event.screen_y)
         except Exception:
@@ -1608,6 +1644,24 @@ class DuckCLI(App):
             editor.action_redo()
         except Exception as e:
             logger.error(f"Error executing redo: {e}")
+
+    def on_key(self, event) -> None:
+        """Global key handler for undo/redo shortcuts when focus is outside the editor."""
+        if len(self.screen_stack) > 1:
+            return
+        key = (event.key or "").lower()
+        if key in ("super+z", "cmd+z", "command+z", "ctrl+z"):
+            self.action_undo()
+            event.stop()
+            event.prevent_default()
+        elif key in (
+            "super+shift+z", "shift+super+z", "cmd+shift+z", "shift+cmd+z",
+            "command+shift+z", "shift+command+z", "ctrl+shift+z", "shift+ctrl+z",
+            "super+y", "cmd+y", "command+y", "ctrl+y"
+        ):
+            self.action_redo()
+            event.stop()
+            event.prevent_default()
 
     def action_close_tab(self):
         tabs = self.query_one("#tabs", TabbedContent)
@@ -1724,7 +1778,7 @@ class DuckCLI(App):
             try:
                 db_tree = self.query_one("#db-tree", DatabaseTree)
                 db_tree.filter_tables(event.value)
-            except:
+            except Exception:
                 # If the element doesn't exist yet, ignore
                 pass
 
