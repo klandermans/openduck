@@ -16,8 +16,12 @@ from unittest.mock import patch, MagicMock
 from io import StringIO
 
 # Import the functions we need to test
+from pathlib import Path
 import sys
-sys.path.append('/Volumes/dev/openduck')
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from openduck import save_query, load_config, add_to_history
 
