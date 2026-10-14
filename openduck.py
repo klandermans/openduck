@@ -999,7 +999,7 @@ class DuckCLI(App):
     
     CSS = """
     #sidebar { width: 30; height: 100%; background: $surface; }
-    #files { height: 1fr; min-height: 6; }
+    #files { height: 2fr; min-height: 8; }
     #db-tree { height: 1fr; min-height: 8; }
     #db-tree-inner { height: 1fr; }
     #saved-queries-tree { height: 1fr; min-height: 5; }
@@ -1052,7 +1052,7 @@ class DuckCLI(App):
         ("ctrl+z,super+z,cmd+z,command+z", "undo", "Undo"),
         ("ctrl+y,super+y,cmd+y,command+y,shift+ctrl+z,ctrl+shift+z,shift+super+z,super+shift+z,shift+cmd+z,cmd+shift+z,shift+command+z,command+shift+z", "redo", "Redo"),
         ("ctrl+w,super+w,cmd+w,command+w", "close_tab", "Close Tab"),
-        ("ctrl+d,super+d,cmd+d,command+d", "disconnect_db", "Disconnect DB"),
+        # ("ctrl+d,super+d,cmd+d,command+d", "disconnect_db", "Disconnect DB"),
         ("ctrl+m", "toggle_mouse", "Toggle Mouse"),
         ("f1", "about", "About"),
         ("ctrl+q,super+q,cmd+q,command+q", "quit", "Quit")
@@ -1068,7 +1068,7 @@ class DuckCLI(App):
         with Horizontal():
             with Vertical(id="sidebar"):
                 yield DuckTree(CWD, id="files")
-                yield DatabaseTree()
+                # yield DatabaseTree()  # Temporarily disabled
                 yield Tree("Saved Queries", id="saved-queries-tree")
                 yield Tree("History", id="history-tree")
             yield ResizeHandle()
@@ -1081,7 +1081,7 @@ class DuckCLI(App):
         # Let Textual initialize its standard mouse driver cleanly without raw ANSI overrides
         self.load_history_list()
         self.load_saved_queries_list()
-        self.load_saved_connections()
+        # self.load_saved_connections()  # Temporarily disabled
         self.set_interval(1.0, self.update_memory_info)
 
         sql = ""
@@ -1281,7 +1281,7 @@ class DuckCLI(App):
         def do_register():
             import pandas as pd
             df = pd.read_excel(file_path)
-            self.con.register(table_name, df)
+            self.con.execute(f'CREATE OR REPLACE TABLE "{table_name}" AS SELECT * FROM df')
             logging.debug(f"Registered Excel file '{file_path}' as table '{table_name}' ({len(df)} rows)")
 
         await asyncio.to_thread(do_register)
@@ -1439,6 +1439,8 @@ class DuckCLI(App):
         tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
         textarea = tab.query_one(TextArea)
         textarea.text = sql
+        textarea.selection = Selection((0, 0), (0, 0))
+        textarea.focus()
 
     def load_history_list(self):
         """Load history into the history tree"""
@@ -1541,22 +1543,56 @@ class DuckCLI(App):
         logging.debug(f"Applied sort: {new_sort} to column {idx}, refreshing table")
         self.refresh_tab_table(tab)
 
-    async def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected):
-        file_path = Path(event.path)
-        if is_duckdb_file(file_path):
+    async def _open_file_path(self, file_path: Path) -> None:
+        """Handle opening a file from the file explorer: load into active tab or create new tab."""
+        if not is_duckdb_file(file_path):
+            return
+        try:
+            suffix = file_path.suffix.lower()
+            if suffix in {".xlsx", ".xls"}:
+                table_name = await self._load_and_register_excel(file_path)
+                sql = f'SELECT * FROM "{table_name}" LIMIT 100;'
+            else:
+                sql = sql_for_file(file_path)
+
             try:
-                suffix = file_path.suffix.lower()
-                if suffix in {".xlsx", ".xls"}:
-                    table_name = await self._load_and_register_excel(file_path)
-                    sql = f"SELECT * FROM {table_name} LIMIT 100;"
-                else:
-                    sql = sql_for_file(file_path)
+                tabs = self.query_one("#tabs", TabbedContent)
+            except Exception:
+                return
+
+            if tabs.active:
+                self.load_query_in_current_tab(sql)
+                try:
+                    active_pane = self.query_one(f"#{tabs.active}", TabPane)
+                    active_pane._title = f"{file_path.name} ✕"
+                    content_tabs = tabs.get_child_by_type(ContentTabs)
+                    target_id = f"--content-tab-{tabs.active}"
+                    for ct in content_tabs.query(ContentTab):
+                        if ct.id == target_id:
+                            ct.label = f"{file_path.name} ✕"
+                            break
+                except Exception:
+                    pass
+                self.run_worker(self.action_run_query())
+            else:
                 await self.add_new_tab(file_path.name, sql, run=True)
-            except Exception as e:
-                logging.error(f"Error opening file {file_path}: {str(e)}")
-                error_msg = self._classify_file_error(e, str(file_path))
-                error_sql = f"-- Error opening file: {file_path.name}\n-- {error_msg}"
-                await self.add_new_tab(f"❌ {file_path.name}", error_sql, run=False)
+        except Exception as e:
+            logging.error(f"Error opening file {file_path}: {str(e)}")
+            error_msg = self._classify_file_error(e, str(file_path))
+            error_sql = f"-- Error opening file: {file_path.name}\n-- {error_msg}"
+            try:
+                tabs = self.query_one("#tabs", TabbedContent)
+                if tabs.active:
+                    self.load_query_in_current_tab(error_sql)
+                else:
+                    await self.add_new_tab(f"❌ {file_path.name}", error_sql, run=False)
+            except Exception:
+                pass
+
+    async def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected):
+        await self._open_file_path(Path(event.path))
+
+    on_duck_tree_file_selected = on_directory_tree_file_selected
 
     def copy_to_clipboard(self, text: str) -> None:
         copy_to_system_clipboard(text)
@@ -1673,6 +1709,11 @@ class DuckCLI(App):
         """Handle selection in database tree, saved queries tree, and history tree."""
         node = event.node
         if not node.data:
+            return
+        if not isinstance(node.data, dict):
+            path = getattr(node.data, "path", None)
+            if path and is_duckdb_file(Path(path)):
+                self.run_worker(self._open_file_path(Path(path)))
             return
         node_type = node.data.get("type")
         if node_type == "table":

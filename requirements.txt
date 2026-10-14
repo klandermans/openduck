@@ -1,4 +1,4 @@
-textual
+textual[syntax]
 duckdb
 pyinstaller
 pandas
