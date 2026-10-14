@@ -1,6 +1,6 @@
-"""OpenDuck - The Modern Terminal SQL IDE & Data Explorer for DuckDB."""
+"""OpenDuck - A flat file SQL client based on DuckDB."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from openduck.core.config import (
     CWD,

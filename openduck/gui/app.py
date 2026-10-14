@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 
 class DuckCLI(App):
-    """The OpenDuck Terminal SQL IDE application."""
+    """OpenDuck - A flat file SQL client based on DuckDB."""
 
     ENABLE_MOUSE_SUPPORT = True
     ALLOW_SELECT = False

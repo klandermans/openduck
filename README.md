@@ -1,7 +1,7 @@
 # 🦆 OpenDuck
 
 <p align="center">
-  <b>The Modern, Lightning-Fast Terminal SQL IDE & Data Explorer for DuckDB</b>
+  <b>A flat file SQL client based on DuckDB</b>
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
   <img width="100%" alt="OpenDuck Interface" src="https://github.com/user-attachments/assets/4aea9df6-6f00-494d-a171-d76a9a3b8133" />
 </p>
 
-**OpenDuck** brings the power and speed of **DuckDB** straight to your terminal in an intuitive, multi-tab Text User Interface (TUI). Effortlessly browse files, inspect datasets, write queries with full syntax highlighting, sort and filter millions of rows in milliseconds, and export results — all without leaving your shell.
+**OpenDuck** is a terminal-based flat file SQL client based on DuckDB. Effortlessly browse files, inspect datasets, write queries with full syntax highlighting, sort and filter millions of rows in milliseconds, and export results — all without leaving your shell.
 
 ---
 
