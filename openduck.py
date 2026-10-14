@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OpenDuck - The Modern, Lightning-Fast Terminal SQL IDE & Data Explorer for DuckDB.
+OpenDuck - A flat file SQL client based on DuckDB.
 
 Main executable entry point.
 """

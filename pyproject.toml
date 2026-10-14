@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openduck-cli"
-version = "0.1.0"
-description = "The Modern, Lightning-Fast Terminal SQL IDE & Data Explorer for DuckDB"
+version = "0.1.1"
+description = "A flat file SQL client based on DuckDB"
 readme = "README.md"
 authors = [{ name = "Bertatron" }]
 license = "MIT"
