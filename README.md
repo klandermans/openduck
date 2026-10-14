@@ -77,15 +77,6 @@ pip3 install openduck-cli
 > sudo ln -s ~/.openduck-venv/bin/openduck /usr/local/bin/openduck
 > ```
 
-**Via Docker (Zero local setup):**
-```bash
-# Run directly with Docker mounting your current data directory:
-docker run -it --rm -v "$(pwd):/data" python:3.12-slim sh -c "pip3 install --no-cache-dir openduck-cli && openduck"
-
-# Or build the included Dockerfile:
-docker build -t openduck .
-docker run -it --rm -v "$(pwd):/data" openduck
-```
 
 **From source:**
 ```bash
