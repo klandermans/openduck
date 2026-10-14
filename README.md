@@ -64,33 +64,59 @@ OpenDuck automatically recognises and formats queries for:
 
 ### 1. Installation
 
-**Via PyPI:**
+**Recommended: Install via `pip3` from PyPI**
 ```bash
-pip install openduck-cli
+pip3 install openduck-cli
+```
+
+> **Tip:** If your system manages Python externally (e.g., Debian/Ubuntu PEP 668), install into a virtual environment or use `pipx`:
+> ```bash
+> python3 -m venv ~/.openduck-venv
+> ~/.openduck-venv/bin/pip3 install openduck-cli
+> # Create a symlink to run it from anywhere:
+> sudo ln -s ~/.openduck-venv/bin/openduck /usr/local/bin/openduck
+> ```
+
+**Via Docker (Zero local setup):**
+```bash
+# Run directly with Docker mounting your current data directory:
+docker run -it --rm -v "$(pwd):/data" python:3.12-slim sh -c "pip3 install --no-cache-dir openduck-cli && openduck"
+
+# Or build the included Dockerfile:
+docker build -t openduck .
+docker run -it --rm -v "$(pwd):/data" openduck
 ```
 
 **From source:**
 ```bash
 git clone https://github.com/klandermans/openduck.git
 cd openduck
-pip install -r requirements.txt
-# or: pip install -e .
+pip3 install -r requirements.txt
+# or install in editable mode:
+pip3 install -e .
 ```
 
 > **Note:** `textual[syntax]` installs the required `tree-sitter` and `tree-sitter-sql` engines for syntax highlighting out of the box.
 
+---
+
 ### 2. Run OpenDuck
 
-```bash
-python openduck.py
-```
-
-Or make it available system-wide as a command:
+After installing with `pip3`, run it directly from any directory:
 
 ```bash
-chmod +x openduck.sh
-sudo cp openduck.sh /usr/local/bin/openduck
 openduck
+```
+*(or `openduck-cli`)*
+
+If you cloned the source repository:
+
+```bash
+python3 openduck.py
+# or
+python3 -m openduck
+# or with the shell wrapper:
+./openduck.sh
 ```
 
 ---
