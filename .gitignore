@@ -5,21 +5,32 @@
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
 venv/
 .venv/
 
 # Build & packaging
 build/
 dist/
-*.spec
+*.build/
+*.dist/
 
 # Local data & logs
 openduck.json
 openduck_debug.log
-*.csv
-*.xlsx
 
 # Editor
 .idea/
 .vscode/
 nvim/
+*.swp
+*.swo
+
+# Sample data exclusion exception (keep samples tracked if desired)
+*.csv
+*.xlsx
+!samples/*.csv
+!samples/*.xlsx

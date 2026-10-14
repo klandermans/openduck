@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openduck-cli"
+version = "0.1.0"
+description = "The Modern, Lightning-Fast Terminal SQL IDE & Data Explorer for DuckDB"
+readme = "README.md"
+authors = [{ name = "Bertatron" }]
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "textual[syntax]>=0.50.0",
+    "duckdb>=0.9.0",
+    "pandas>=2.0.0",
+    "openpyxl>=3.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pyinstaller",
+]
+db = [
+    "pymssql",
+]
+
+[project.scripts]
+openduck = "openduck.main:main"
+openduck-cli = "openduck.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["openduck*"]

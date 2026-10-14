@@ -64,12 +64,17 @@ OpenDuck automatically recognises and formats queries for:
 
 ### 1. Installation
 
-Clone the repository and install the dependencies:
+**Via PyPI:**
+```bash
+pip install openduck-cli
+```
 
+**From source:**
 ```bash
 git clone https://github.com/klandermans/openduck.git
 cd openduck
 pip install -r requirements.txt
+# or: pip install -e .
 ```
 
 > **Note:** `textual[syntax]` installs the required `tree-sitter` and `tree-sitter-sql` engines for syntax highlighting out of the box.
@@ -145,6 +150,37 @@ OpenDuck automatically manages `openduck.json` in your working directory. It per
 
 ---
 
+## 📁 Project Structure
+
+```text
+openduck/
+├── openduck/                 # Core Python package
+│   ├── __init__.py           # Package entry and exports
+│   ├── __main__.py           # CLI invocation (python -m openduck)
+│   ├── main.py               # Application bootstrap & logging setup
+│   ├── core/                 # Core logic & backend
+│   │   ├── config.py         # Config persistence, query history, saved queries
+│   │   ├── clipboard.py      # Cross-platform system clipboard integration
+│   │   ├── sql_utils.py      # SQL formatting, file-to-query mapper, comments
+│   │   └── error_classifier.py # Diagnostic error classifier
+│   └── gui/                  # Textual user interface
+│       ├── app.py            # Main DuckCLI application
+│       ├── styles.py         # Textual CSS stylesheets
+│       ├── screens/          # Modal screens (About, Matrix screensaver)
+│       ├── dialogs/          # Modal dialogs (Save Query, Export, Add DB)
+│       └── widgets/          # Custom widgets (Editor, ResultsTable, Trees, etc.)
+├── docs/                     # Documentation & guides
+├── scripts/                  # Build scripts & packaging specs
+├── tests/                    # Automated test suite
+├── samples/                  # Sample datasets for testing & exploration
+├── openduck.py               # Root executable script
+├── openduck.sh               # Shell launcher script
+└── pyproject.toml            # Python package configuration
+```
+
+---
+
 ## 📜 License
 
 Distributed under the **MIT License**. See `LICENSE` for details.
+

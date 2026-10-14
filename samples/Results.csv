@@ -1,0 +1,205 @@
+disorderdesc,diagnosiscategorytypename
+Oorontsteking,CommonDiseases
+Slepende melkziekte (Energie-tekort),Undefined
+Oogontsteking,CommonDiseases
+RABIES ENTING,CommonDiseases
+Cysteuse eierstokken recheck,Genitals
+Blaasontsteking,CommonDiseases
+Abces,Skin
+Gebroken poot / Fractuur,LegsClaws
+Longworm,Respiratory
+Teen necrose,LegsClaws
+Lebmaag- / darmbloeding,StomachIntestines
+Melkziekte (Calcium-tekort)  (Ca),Undefined
+Onbekend,LegsClaws
+Difterie,StomachIntestines
+Zonnebrand,Skin
+Diarree (onbekend),StomachIntestines
+Navelbreuk,Skin
+Abces,LegsClaws
+Lebmaagverplaatsing rechts,StomachIntestines
+BVD (virus)  (ziek),StomachIntestines
+Huidontsteking,Skin
+bekappen onderhoud,LegsClaws
+cl rechts,Genitals
+Actief / Normaal cyclisch,Genitals
+Zoolzweer ernstig = 3,LegsClaws
+Baarmoeder eruit / Prolapsus uteri,Genitals
+Baarmoederdraaiing / Torsio uteri,Genitals
+Bevangenheid 2,LegsClaws
+Ontsteking rond de geboorteweg / PVR,Genitals
+Onbekend,Skin
+Zenuwbeschadiging,Other
+Tochtig spuiten,Genitals
+Verwonding,Skin
+Salmonella  (ziek),Respiratory
+Zoolzweer matig = 2,LegsClaws
+BVD/IBR VAC,Undefined
+witte lijn defect,LegsClaws
+Groffe Baarmoeder,Genitals
+Witte lijn defect ernstig = 3 (wandzweer),LegsClaws
+Onbekend,Genitals
+MASTITIS,MastitisClinical
+"""Indigestie / """" Van streek zijn """"""",StomachIntestines
+IBR  (virus)    (drager),CommonDiseases
+Tyloom matig = 2,LegsClaws
+DIKKE POOT BIJ KLAUWEN,LegsClaws
+Koliek / Buikpijn,StomachIntestines
+Driespeen,UdderTeats
+Overig,MastitisSubClinical
+Mortellaro ernstig = 3,LegsClaws
+Schurft(mijten),Skin
+Vliegen/luizen/end,Undefined
+Zenuwbeschadiging,CommonDiseases
+Slepende melkziekte (Energie-tekort),Metabolic
+Nierontsteking,CommonDiseases
+Punt zweer,LegsClaws
+Knik,LegsClaws
+Navelbreuk,Other
+Cysteuse eierstokken afwachten,Genitals
+Nageboorte erop ( > 24 uur ),Genitals
+Maagdarmwormen,StomachIntestines
+Bevangenheid,LegsClaws
+Longontsteking / Bronchitis,Respiratory
+cl links,Genitals
+Salmonella  (ziek),StomachIntestines
+Bloeduitstorting / Haematoom,Skin
+Geen groei  (GG),MastitisClinical
+Kneuzing,LegsClaws
+Salmonella  (ziek),CommonDiseases
+Hersenvliesontsteking,CommonDiseases
+Zenuwbeschadiging,LegsClaws
+Anoestrus / Inactieve eierstokken,Genitals
+Navelontsteking,Skin
+BVD (virus)  (ziek),Undefined
+Darmverstoring/verstopping,StomachIntestines
+Overig,Metabolic
+Onbekend,Metabolic
+onthoornen,Other
+Corona (virus),StomachIntestines
+Bruls / Cysteuze eierstok(ken),Genitals
+Cysteuse eierstokken spuiten,Genitals
+Koper-tekort  (Cu),Metabolic
+Mortellaro matig = 2,LegsClaws
+Witte lijn defect matig = 2,LegsClaws
+IBR  (virus)    (ziek),Respiratory
+Tussenklauwontsteking,LegsClaws
+blokje verwijderen,LegsClaws
+Cryptosporidien,StomachIntestines
+Diarree (onbekend),Undefined
+Oogontsteking,Other
+Onbekend,UdderTeats
+"Vuilen       (  < 14 dagen , stinkt )",Genitals
+Streptococcus agalactiae  (SAG),MastitisClinical
+Blauwtong vac 1,Undefined
+Overig,UdderTeats
+CMT + BO ONDERZOEK,MastitisSubClinical
+Zoolzweer licht = 1,LegsClaws
+Leverbot,StomachIntestines
+Overig,MastitisClinical
+"Witvuilen   (  > 14 dagen , niet helder )",Genitals
+Kalium-vergiftiging  (K),Metabolic
+Onbekend,MastitisClinical
+Hart(klep)ontsteking,Other
+Spierbeschadiging,Other
+BLOED TAPPEN,Other
+Verwonding,LegsClaws
+Oorontsteking,Other
+Schimmel / Ringschurft / Trichofytie,Skin
+Melkziekte (Calcium-tekort)  (Ca),Metabolic
+Onbekend,StomachIntestines
+Mengcultuur  (MGC),MastitisClinical
+Verwerper,Genitals
+ParaTBC     (ziek),Undefined
+Onbekend,CommonDiseases
+Longontsteking / Bronchitis,Undefined
+Kobalt-tekort (Co),Metabolic
+Teenpuntnecrose,LegsClaws
+Overig,CommonDiseases
+Overig,StomachIntestines
+Opgelopen / Tympanie,StomachIntestines
+Buikvliesontsteking / Peritonitis,Other
+Zoolzweer,LegsClaws
+Embryonale sterfte,Genitals
+Dunne zool,LegsClaws
+Bevangenheid 3,LegsClaws
+Diarree (onbekend),CommonDiseases
+Staph. Aureur coag+,MastitisClinical
+Ontsteking  van de geboorteweg / Vaginitis,Genitals
+Abces (etterbult),Skin
+Stinkpoot matig = 2,LegsClaws
+Ontsteking van het gewricht / Artritis,LegsClaws
+Stinkpoot licht = 1,LegsClaws
+Hoornstoten,Skin
+Zoolbloeding licht = 1,LegsClaws
+Koorts,CommonDiseases
+Bloeduitstorting / Haematoom,UdderTeats
+Wandzweer,LegsClaws
+Scherp-in,StomachIntestines
+Droogzetten,UdderTeats
+Overig,LegsClaws
+Etterbaarmoeder / Pyometra,Genitals
+Tyloom,LegsClaws
+Zoolbloeding ernstig = 3,LegsClaws
+Schimmel / Ringschurft / Trichofytie,Undefined
+Kreupelheid,Undefined
+Lebmaagverplaatsing links,StomachIntestines
+Bevangenheid chronisch (groeiringen),LegsClaws
+Kopziekte (Magnesium-tekort)  (Mg),Metabolic
+Tussenteenwoekering (tyloom),LegsClaws
+Hoog celgetal,MastitisSubClinical
+Hoog celgetal,UdderTeats
+Overig,Skin
+D- maar Actief,Genitals
+Klebsiella,MastitisClinical
+overmatige hoorn groei,LegsClaws
+Witvuilen SPUITEN,Genitals
+BVD (virus)   (drager),CommonDiseases
+ACTIEF/CYCLISCH/SCHOON,Genitals
+Streptococcus uberis  (SUB),MastitisClinical
+E. coli,StomachIntestines
+Voedingsdiarree,StomachIntestines
+Stinkpoot ernstig = 3,LegsClaws
+Selenium-tekort  (Se),Metabolic
+E. coli (ECO),MastitisClinical
+TOCHTIG,Genitals
+Baarmoederontsteking (ziek / koorts),Genitals
+Onbekend,MastitisSubClinical
+IBR  (virus)    (ziek),Undefined
+Navelontsteking,Other
+Zucht/Oedeem,UdderTeats
+Ontsteking rond het gewricht / Peri-artritis,LegsClaws
+op klosje gezet,LegsClaws
+Hoesten,Respiratory
+Overig,Genitals
+E. coli,MastitisClinical
+Stinkpoot,LegsClaws
+Difterie,Respiratory
+Bevangenheid 1,LegsClaws
+BVD (virus)  (ziek),Respiratory
+Hersenvliesontsteking,Other
+Drukplek,LegsClaws
+Mortellaro / Italiaanse stinkpoot,LegsClaws
+Pinkengriep (virus),Respiratory
+Dikke hak,LegsClaws
+Onbekend,Other
+Overig,Other
+Zoolbloeding matig = 2,LegsClaws
+Speenbetrapping,UdderTeats
+Buikvliesontsteking / Peritonitis,CommonDiseases
+Lebmaagverplaatsing,StomachIntestines
+Rota  (virus),StomachIntestines
+TOCHTIG + KI,Genitals
+Actieve eierstokken / Niet tochtig / Suboestrus,Genitals
+Coccidiosis,StomachIntestines
+Witte lijn defect licht = 1,LegsClaws
+Keelontsteking,Respiratory
+Tyloom ernstig = 3,LegsClaws
+Onbekend,Respiratory
+Dubbele zool,LegsClaws
+D++ CONTROLE UITGEVOERD,Genitals
+Mortellaro licht = 1,LegsClaws
+Leververvetting,Metabolic
+Overig,Respiratory
+Longworm,Undefined
+Pinkengriep (virus),Undefined
