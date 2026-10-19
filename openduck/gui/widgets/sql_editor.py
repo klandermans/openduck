@@ -38,6 +38,8 @@ _sql_text_area_bindings.append(
         "toggle_comment", "Comment", show=False
     )
 )
+_sql_text_area_bindings.append(Binding("tab", "indent", "Indent", show=False))
+_sql_text_area_bindings.append(Binding("shift+tab,backtab", "unindent", "Unindent", show=False))
 
 
 class SqlTextArea(TextArea):
@@ -197,6 +199,143 @@ class SqlTextArea(TextArea):
             self.action_redo()
             event.stop()
             event.prevent_default()
+        elif key == "tab" and not self.selection.is_empty:
+            self.action_indent()
+            event.stop()
+            event.prevent_default()
+        elif key in ("shift+tab", "backtab"):
+            self.action_unindent()
+            event.stop()
+            event.prevent_default()
+
+    def action_indent(self) -> None:
+        """Indent selected lines (or insert indentation at cursor if no selection)."""
+        if self.read_only:
+            return
+
+        selection = self.selection
+        if selection.is_empty:
+            if getattr(self, "indent_type", "spaces") == "tabs":
+                insert_str = "\t"
+            else:
+                insert_str = " " * self._find_columns_to_next_tab_stop()
+            self._replace_via_keyboard(insert_str, selection.start, selection.end)
+            return
+
+        start, end = selection.start, selection.end
+        is_reversed = start > end
+        if is_reversed:
+            start, end = end, start
+
+        start_row, start_col = start
+        end_row, end_col = end
+
+        if end_row > start_row and end_col == 0:
+            actual_end_row = end_row - 1
+        else:
+            actual_end_row = end_row
+
+        actual_end_row = min(actual_end_row, max(0, self.document.line_count - 1))
+        lines = [self.document.get_line(r) for r in range(start_row, actual_end_row + 1)]
+        indent_str = "\t" if getattr(self, "indent_type", "spaces") == "tabs" else (" " * getattr(self, "indent_width", 4))
+
+        new_lines = []
+        deltas = []
+        for line in lines:
+            if len(lines) > 1 and not line:
+                new_lines.append("")
+                deltas.append(0)
+            else:
+                new_lines.append(f"{indent_str}{line}")
+                deltas.append(len(indent_str))
+
+        if not any(deltas):
+            return
+
+        replacement = "\n".join(new_lines)
+        self.replace(replacement, (start_row, 0), (actual_end_row, len(lines[-1])), maintain_selection_offset=False)
+
+        delta_start = deltas[0]
+        new_start_col = start_col + delta_start if start_col > 0 else 0
+
+        if end_row > start_row and end_col == 0:
+            new_end_row = end_row
+            new_end_col = 0
+        else:
+            delta_end = deltas[-1]
+            new_end_row = end_row
+            new_end_col = end_col + delta_end
+
+        if is_reversed:
+            self.selection = Selection((new_end_row, new_end_col), (start_row, new_start_col))
+        else:
+            self.selection = Selection((start_row, new_start_col), (new_end_row, new_end_col))
+
+    def action_unindent(self) -> None:
+        """Unindent selected lines (or current line if no selection)."""
+        if self.read_only:
+            return
+
+        selection = self.selection
+        start, end = selection.start, selection.end
+        is_reversed = start > end
+        if is_reversed:
+            start, end = end, start
+
+        start_row, start_col = start
+        end_row, end_col = end
+
+        if selection.is_empty:
+            actual_end_row = start_row
+        elif end_row > start_row and end_col == 0:
+            actual_end_row = end_row - 1
+        else:
+            actual_end_row = end_row
+
+        actual_end_row = min(actual_end_row, max(0, self.document.line_count - 1))
+        lines = [self.document.get_line(r) for r in range(start_row, actual_end_row + 1)]
+        indent_width = getattr(self, "indent_width", 4)
+
+        new_lines = []
+        deltas = []
+        for line in lines:
+            if line.startswith("\t"):
+                new_lines.append(line[1:])
+                deltas.append(1)
+            elif line.startswith(" "):
+                num_leading = len(line) - len(line.lstrip(" "))
+                delta = min(indent_width, num_leading)
+                new_lines.append(line[delta:])
+                deltas.append(delta)
+            else:
+                new_lines.append(line)
+                deltas.append(0)
+
+        if not any(deltas):
+            return
+
+        replacement = "\n".join(new_lines)
+        self.replace(replacement, (start_row, 0), (actual_end_row, len(lines[-1])), maintain_selection_offset=False)
+
+        delta_start = deltas[0]
+        new_start_col = max(0, start_col - delta_start)
+
+        if selection.is_empty:
+            self.move_cursor((start_row, new_start_col))
+            return
+
+        if end_row > start_row and end_col == 0:
+            new_end_row = end_row
+            new_end_col = 0
+        else:
+            delta_end = deltas[-1]
+            new_end_row = end_row
+            new_end_col = max(0, end_col - delta_end)
+
+        if is_reversed:
+            self.selection = Selection((new_end_row, new_end_col), (start_row, new_start_col))
+        else:
+            self.selection = Selection((start_row, new_start_col), (new_end_row, new_end_col))
 
     def action_undo(self) -> None:
         """Undo last action in editor."""
