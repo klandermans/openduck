@@ -1,0 +1,9 @@
+id,species,common_name,habitat,wingspan_cm,migratory
+1,Anas platyrhynchos,Mallard,Wetlands,90,true
+2,Aix galericulata,Mandarin Duck,Forest Ponds,70,true
+3,Aythya fuligula,Tufted Duck,Lakes,68,true
+4,Somateria mollissima,Common Eider,Coastal Waters,95,true
+5,Tadorna tadorna,Common Shelduck,Estuaries,115,true
+6,Callonetta leucophrys,Ringed Teal,Tropical Swamps,52,false
+7,Bucephala clangula,Common Goldeneye,Boreal Lakes,72,true
+8,Mergus merganser,Common Merganser,Rivers,90,true
