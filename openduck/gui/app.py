@@ -104,16 +104,44 @@ class DuckCLI(App):
         # Delay adding the first tab slightly to allow UI to settle
         self.set_timer(0.2, lambda: self.run_worker(self.add_new_tab("Main", sql)))
 
+    def _get_process_memory_mb(self) -> Optional[float]:
+        """Return current process memory usage in MB across macOS, Linux, and Windows."""
+        if resource is not None:
+            mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            if sys.platform == "darwin":
+                return mem / (1024 * 1024)
+            return mem / 1024
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            pmc = PROCESS_MEMORY_COUNTERS()
+            pmc.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+            handle = ctypes.windll.kernel32.GetCurrentProcess()
+            if ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(pmc), pmc.cb):
+                return pmc.WorkingSetSize / (1024 * 1024)
+        return None
+
     def update_memory_info(self):
         """Update the memory info in the active tab's footer bar."""
-        if resource is None:
-            return
         try:
-            mem = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            if sys.platform == 'darwin':
-                mem_mb = mem / (1024 * 1024)
-            else:
-                mem_mb = mem / 1024
+            mem_mb = self._get_process_memory_mb()
+            if mem_mb is None:
+                return
 
             tabs = self.query_one("#tabs", TabbedContent)
             if tabs.active:

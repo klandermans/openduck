@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10%2B-blue?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.10+" />
+  <img src="https://img.shields.io/badge/Python-3.9%2B-blue?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.9+" />
   <img src="https://img.shields.io/badge/DuckDB-Fast%20Analytics-yellow?style=for-the-badge&logo=duckdb&logoColor=black" alt="DuckDB" />
   <img src="https://img.shields.io/badge/TUI-Textual-green?style=for-the-badge" alt="Textual" />
   <img src="https://img.shields.io/badge/License-MIT-orange?style=for-the-badge" alt="MIT License" />
@@ -64,12 +64,19 @@ OpenDuck automatically recognises and formats queries for:
 
 ### 1. Installation
 
-**Recommended: Install via `pip3` from PyPI**
+**macOS / Linux (via PyPI):**
 ```bash
 pip3 install openduck-cli
 ```
 
-> **Tip:** If your system manages Python externally (e.g., Debian/Ubuntu PEP 668), install into a virtual environment or use `pipx`:
+**Windows (PowerShell / Command Prompt):**
+```powershell
+pip install openduck-cli
+# or via the Windows Python Launcher:
+py -m pip install openduck-cli
+```
+
+> **Tip (macOS / Linux PEP 668):** If your system manages Python externally (e.g., Debian/Ubuntu/Homebrew), install into a virtual environment or use `pipx`:
 > ```bash
 > python3 -m venv ~/.openduck-venv
 > ~/.openduck-venv/bin/pip3 install openduck-cli
@@ -87,18 +94,18 @@ pip3 install -r requirements.txt
 pip3 install -e .
 ```
 
-> **Note:** `textual[syntax]` installs the required `tree-sitter` and `tree-sitter-sql` engines for syntax highlighting out of the box.
+> **Note:** `textual[syntax]` installs the required `tree-sitter` and `tree-sitter-sql` engines for syntax highlighting out of the box (supports Python 3.9 – 3.14 across macOS, Linux, and Windows).
 
 ---
 
 ### 2. Run OpenDuck
 
-After installing with `pip3`, run it directly from any directory:
+After installing from PyPI, run it directly from any directory:
 
 ```bash
 openduck
 ```
-*(or `openduck-cli`)*
+*(or `openduck-cli`, or `py -m openduck` on Windows if `Scripts` is not in your `PATH`)*
 
 If you cloned the source repository:
 
@@ -119,6 +126,7 @@ python3 -m openduck
 | `Ctrl+Enter` / `Cmd+Enter` | **Run Query** (runs selection if text is selected, or full editor) |
 | `Ctrl+S` / `Cmd+S` | **Save Query** with custom name to `openduck.json` |
 | `F3` / `Cmd+/` / `Ctrl+/` | **Toggle SQL Comment** (`--`) on current line or selection |
+| `Tab` / `Shift+Tab` | **Indent / Unindent** selected SQL lines |
 | `Ctrl+Z` / `Cmd+Z` | **Undo** last edit |
 | `Ctrl+Y` / `Cmd+Shift+Z` | **Redo** undone edit |
 | `Ctrl+W` / `Cmd+W` | **Close Current Tab** |

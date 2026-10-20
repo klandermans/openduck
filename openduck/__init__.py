@@ -1,6 +1,6 @@
 """OpenDuck - A flat file SQL client based on DuckDB."""
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 
 from openduck.core.config import (
     CWD,
