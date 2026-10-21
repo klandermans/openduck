@@ -17,6 +17,7 @@ except ImportError:
 
 import duckdb
 from textual.app import App, ComposeResult
+from textual.content import Content
 from textual.containers import Horizontal, Vertical
 from textual.events import Click
 from textual.widgets import (
@@ -56,6 +57,8 @@ logger = logging.getLogger(__name__)
 class DuckCLI(App):
     """OpenDuck - A flat file SQL client based on DuckDB."""
 
+    TITLE = "OpenDuck"
+    SUB_TITLE = "done"
     ENABLE_MOUSE_SUPPORT = True
     ALLOW_SELECT = False
     CSS = APP_CSS
@@ -79,6 +82,7 @@ class DuckCLI(App):
         self.db_connections: dict = {}
 
     def compose(self) -> ComposeResult:
+        yield Header(show_clock=False)
         with Horizontal():
             with Vertical(id="sidebar"):
                 yield DuckTree(CWD, id="files")
@@ -88,10 +92,196 @@ class DuckCLI(App):
             yield ResizeHandle()
             with Vertical(id="main-content"):
                 yield TabbedContent(id="tabs")
-        yield Header()
         yield Footer()
 
+    def format_title(self, title: Optional[str] = None, sub_title: Optional[str] = None) -> Content:
+        """Format the title and subtitle for display in the header.
+
+        Line 1: Bold title followed by status dot with status color.
+        Line 2: Subtitle styled with status color.
+        """
+        title_str = title if title else (getattr(self, "TITLE", "OpenDuck") or "OpenDuck")
+        sub_str = sub_title if sub_title is not None else (getattr(self, "SUB_TITLE", "done") or "")
+
+        clean_sub = sub_str.strip()
+        prefixes = ("• ", "•", "● ", "●", "🟢 ", "🟢", "🔴 ", "🔴", "🟡 ", "🟡")
+        changed = True
+        while changed:
+            changed = False
+            for prefix in prefixes:
+                if clean_sub.startswith(prefix):
+                    clean_sub = clean_sub[len(prefix):].strip()
+                    changed = True
+                    break
+
+        lower = clean_sub.lower()
+        if "running" in lower or "exec" in lower:
+            color = "red"
+        elif "error" in lower or "fail" in lower:
+            color = "red"
+        elif "cancel" in lower:
+            color = "yellow"
+        else:
+            color = "green"
+
+        parts = [
+            (f"{title_str} ", "bold"),
+            ("•", color),
+        ]
+        if clean_sub:
+            parts.append((f"\n{clean_sub}", color))
+
+        return Content.assemble(*parts)
+
+
+    def _set_terminal_title(self, title: str) -> None:
+        """Set terminal tab and window title using OSC 0, OSC 1 and OSC 2 escape sequences."""
+        seq = f"\033]0;{title}\007\033]1;{title}\007\033]2;{title}\007"
+        driver = getattr(self, "_driver", None)
+        if driver is not None and hasattr(driver, "write"):
+            try:
+                driver.write(seq)
+                if hasattr(driver, "flush"):
+                    driver.flush()
+                return
+            except Exception:
+                pass
+        try:
+            if sys.__stdout__ and sys.__stdout__.isatty():
+                sys.__stdout__.write(seq)
+                sys.__stdout__.flush()
+        except Exception:
+            pass
+
+    def _push_terminal_title(self) -> None:
+        """Save terminal window/tab title to stack."""
+        seq = "\033[22;0t"
+        driver = getattr(self, "_driver", None)
+        if driver is not None and hasattr(driver, "write"):
+            try:
+                driver.write(seq)
+                if hasattr(driver, "flush"):
+                    driver.flush()
+                return
+            except Exception:
+                pass
+        try:
+            if sys.__stdout__ and sys.__stdout__.isatty():
+                sys.__stdout__.write(seq)
+                sys.__stdout__.flush()
+        except Exception:
+            pass
+
+    def _pop_terminal_title(self) -> None:
+        """Restore previous terminal window/tab title from stack."""
+        seq = "\033[23;0t"
+        driver = getattr(self, "_driver", None)
+        if driver is not None and hasattr(driver, "write"):
+            try:
+                driver.write(seq)
+                if hasattr(driver, "flush"):
+                    driver.flush()
+                return
+            except Exception:
+                pass
+        try:
+            if sys.__stdout__ and sys.__stdout__.isatty():
+                sys.__stdout__.write(seq)
+                sys.__stdout__.flush()
+        except Exception:
+            pass
+
+    def is_any_query_running(
+        self,
+        exclude_task: Optional[asyncio.Task] = None,
+        exclude_pane_id: Optional[str] = None,
+    ) -> bool:
+        """Check if any query tab currently has an active running query task."""
+        if exclude_task is None:
+            try:
+                exclude_task = asyncio.current_task()
+            except Exception:
+                exclude_task = None
+        try:
+            tabs = self.query_one("#tabs", TabbedContent)
+            for pane in tabs.query(TabPane):
+                if exclude_pane_id and pane.id == exclude_pane_id:
+                    continue
+                try:
+                    qtab = pane.query_one(QueryTab)
+                    task = getattr(qtab, "running_task", None)
+                    if task and not task.done():
+                        if hasattr(task, "cancelling") and task.cancelling():
+                            continue
+                        if exclude_task is None or task is not exclude_task:
+                            return True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return False
+
+    def _close_tab_by_id(self, pane_id: str) -> None:
+        """Helper to cancel any running task on a tab before closing it, and refresh status."""
+        try:
+            tab = self.query_one(f"#{pane_id}").query_one(QueryTab)
+            if hasattr(tab, "running_task") and tab.running_task:
+                if not tab.running_task.done():
+                    tab.running_task.cancel()
+                tab.running_task = None
+        except Exception:
+            pass
+
+        try:
+            tabs = self.query_one("#tabs", TabbedContent)
+            tabs.remove_pane(pane_id)
+        except Exception:
+            pass
+
+        # If no queries are running anywhere, ensure status is done
+        if not self.is_any_query_running(exclude_pane_id=pane_id):
+            self.set_status("done")
+
+    def set_status(
+        self,
+        status: str,
+        icon: Optional[str] = None,
+        details: Optional[str] = None,
+    ) -> None:
+        """Update execution status in terminal tab/window title.
+
+        Args:
+            status: Status name, e.g. 'running', 'done', 'ready', 'error', 'cancelled'.
+            icon: Optional icon override. Defaults to bullet '•'.
+            details: Optional extra text (e.g. elapsed time).
+        """
+        try:
+            clean_status = status.strip()
+            prefixes = ("• ", "•", "● ", "●", "🟢 ", "🟢", "🔴 ", "🔴", "🟡 ", "🟡")
+            changed = True
+            while changed:
+                changed = False
+                for prefix in prefixes:
+                    if clean_status.startswith(prefix):
+                        clean_status = clean_status[len(prefix):].strip()
+                        changed = True
+                        break
+
+            dot = icon if icon is not None else "•"
+
+            label = f"{clean_status} ({details})" if details else clean_status
+            self.sub_title = label
+
+            term_title = f"{self.TITLE} {dot} {label}".strip() if label else f"{self.TITLE} {dot}"
+            self._set_terminal_title(term_title)
+        except Exception as e:
+            logger.debug(f"Error updating status: {e}")
+
     def on_mount(self):
+        # Push current terminal title so we can restore it on exit
+        self._push_terminal_title()
+        self.set_status("done")
+
         # Let Textual initialize its standard mouse driver cleanly without raw ANSI overrides
         self.load_history_list()
         self.load_saved_queries_list()
@@ -103,6 +293,9 @@ class DuckCLI(App):
             sql = self.config["history"][-1]["sql"]
         # Delay adding the first tab slightly to allow UI to settle
         self.set_timer(0.2, lambda: self.run_worker(self.add_new_tab("Main", sql)))
+
+    def on_unmount(self):
+        self._pop_terminal_title()
 
     def _get_process_memory_mb(self) -> Optional[float]:
         """Return current process memory usage in MB across macOS, Linux, and Windows."""
@@ -162,6 +355,7 @@ class DuckCLI(App):
         conn_id = conn_info["id"]
         db_tree = self.query_one("#db-tree", DatabaseTree)
         db_tree.add_connection_node(conn_info)
+        self.set_status("running")
         try:
             if conn_info["type"] == "mysql":
                 tables = await self._connect_mysql(conn_info)
@@ -170,6 +364,7 @@ class DuckCLI(App):
             else:
                 raise ValueError(f"Unknown type: {conn_info['type']}")
             db_tree.update_tables(conn_id, tables)
+            self.set_status("done")
         except Exception as e:
             db_tree.remove_connection_node(conn_id)
             err_node = db_tree.original_tree.root.add(
@@ -178,6 +373,7 @@ class DuckCLI(App):
             )
             err_node.add_leaf(f"[red]{str(e)[:60]}[/red]")
             self.db_connections.pop(conn_id, None)
+            self.set_status("error")
 
     async def _connect_mysql(self, conn_info: dict) -> list:
         conn_id = conn_info["id"]
@@ -326,13 +522,20 @@ class DuckCLI(App):
         self.config = load_config()  # Reload config to ensure it's up to date
         self.load_history_list()  # Refresh the history list in UI
 
+        # Cancel any previous running task on this tab before starting a new one
+        if getattr(tab, "running_task", None) and not tab.running_task.done():
+            try:
+                tab.running_task.cancel()
+            except Exception:
+                pass
+
+        current_task = asyncio.current_task()
+        tab.running_task = current_task
         tbl = tab.query_one(DataTable)
         meta = tab.query_one("#metadata-bar")
         tbl.loading = True
         meta.update("Executing...")
-
-        # Track this task so it can be cancelled
-        tab.running_task = asyncio.current_task()
+        self.set_status("running")
         logger.debug("Query execution started, task tracked")
 
         conn_id = tab.connection_id
@@ -373,6 +576,8 @@ class DuckCLI(App):
 
         try:
             data, cols, _, duration, is_truncated = await asyncio.to_thread(execute)
+            if tab.running_task is not current_task:
+                return
             tab.column_names = cols
             tab.full_data = data
             tab.col_states = {i: {"filter": "", "sort": None} for i in range(len(cols))}
@@ -384,35 +589,44 @@ class DuckCLI(App):
             rows_label = f"{MAX_UI_ROWS}+ (truncated)" if is_truncated else str(len(data))
             meta.update(f"Rows: {rows_label} | Time: {duration:.4f}s{conn_label} | Finished: {datetime.now().strftime('%H:%M:%S')}")
             logger.debug(f"Query completed successfully: {len(data)} rows in {duration:.4f}s")
-        except asyncio.CancelledError:
+            if not self.is_any_query_running(exclude_task=current_task):
+                self.set_status("done")
+        except (asyncio.CancelledError, getattr(duckdb, "InterruptException", ())):
             logger.debug("Query was cancelled")
-            meta.update("Query cancelled")
+            if tab.running_task is current_task:
+                meta.update("Query cancelled")
+                if not self.is_any_query_running(exclude_task=current_task):
+                    self.set_status("cancelled")
         except Exception as e:
             logger.error(f"Error executing query: {str(e)}")
-            tbl.clear(columns=True)
-            tbl.add_column("Error")
+            if tab.running_task is current_task:
+                tbl.clear(columns=True)
+                tbl.add_column("Error")
 
-            # Try to extract file path from the SQL for better error messages
-            file_path = ""
-            csv_match = re.search(r"read_csv_auto\('([^']+)'\)", sql)
-            json_match = re.search(r"read_json_auto\('([^']+)'\)", sql)
-            file_match = re.search(r"FROM '([^']+)'", sql)
+                # Try to extract file path from the SQL for better error messages
+                file_path = ""
+                csv_match = re.search(r"read_csv_auto\('([^']+)'\)", sql)
+                json_match = re.search(r"read_json_auto\('([^']+)'\)", sql)
+                file_match = re.search(r"FROM '([^']+)'", sql)
 
-            if csv_match:
-                file_path = csv_match.group(1)
-            elif json_match:
-                file_path = json_match.group(1)
-            elif file_match:
-                file_path = file_match.group(1)
+                if csv_match:
+                    file_path = csv_match.group(1)
+                elif json_match:
+                    file_path = json_match.group(1)
+                elif file_match:
+                    file_path = file_match.group(1)
 
-            error_message = self._classify_file_error(e, file_path) if file_path else str(e)
+                error_message = self._classify_file_error(e, file_path) if file_path else str(e)
 
-            tbl.add_row(error_message)
-            meta.update("Error occurred")
+                tbl.add_row(error_message)
+                meta.update("Error occurred")
+                if not self.is_any_query_running(exclude_task=current_task):
+                    self.set_status("error")
         finally:
-            tbl.loading = False
-            tab.running_task = None  # Clear the running task reference
-            logger.debug("Query execution completed, task reference cleared")
+            if tab.running_task is current_task:
+                tbl.loading = False
+                tab.running_task = None  # Clear the running task reference
+                logger.debug("Query execution completed, task reference cleared")
 
     def action_save_query(self):
         """Save the current query with a name."""
@@ -550,6 +764,7 @@ class DuckCLI(App):
         """Handle opening a file from the file explorer: load into active tab or create new tab."""
         if not is_duckdb_file(file_path):
             return
+        self.set_status("running")
         try:
             suffix = file_path.suffix.lower()
             if suffix in {".xlsx", ".xls"}:
@@ -561,6 +776,8 @@ class DuckCLI(App):
             try:
                 tabs = self.query_one("#tabs", TabbedContent)
             except Exception:
+                if not self.is_any_query_running():
+                    self.set_status("done")
                 return
 
             if tabs.active:
@@ -581,6 +798,7 @@ class DuckCLI(App):
                 await self.add_new_tab(file_path.name, sql, run=True)
         except Exception as e:
             logger.error(f"Error opening file {file_path}: {str(e)}")
+            self.set_status("error")
             error_msg = self._classify_file_error(e, str(file_path))
             error_sql = f"-- Error opening file: {file_path.name}\n-- {error_msg}"
             try:
@@ -662,7 +880,7 @@ class DuckCLI(App):
             relative_x = event.screen_x - widget.region.x
             if relative_x >= widget.region.width - 3:
                 pane_id = ContentTab.sans_prefix(widget.id)
-                self.query_one("#tabs", TabbedContent).remove_pane(pane_id)
+                self._close_tab_by_id(pane_id)
                 event.stop()
 
     def action_undo(self):
@@ -706,7 +924,7 @@ class DuckCLI(App):
     def action_close_tab(self):
         tabs = self.query_one("#tabs", TabbedContent)
         if tabs.active:
-            tabs.remove_pane(tabs.active)
+            self._close_tab_by_id(tabs.active)
 
     def action_quit(self):
         self.exit()
@@ -798,7 +1016,8 @@ class DuckCLI(App):
                 return
 
             tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
-            if tab.running_task and not tab.running_task.done():
+            task = getattr(tab, "running_task", None)
+            if task and not task.done():
                 logger.debug("Cancelling query task and interrupting DuckDB")
                 # Interrupt DuckDB execution
                 try:
@@ -806,17 +1025,19 @@ class DuckCLI(App):
                 except Exception as e:
                     logger.error(f"Error interrupting DuckDB: {e}")
 
-                tab.running_task.cancel()
+                task.cancel()
                 meta = tab.query_one("#metadata-bar")
                 meta.update("Query cancelled")
                 tbl = tab.query_one(DataTable)
                 tbl.loading = False
+                if not self.is_any_query_running(exclude_task=task):
+                    self.set_status("cancelled")
 
         elif event.button.id == "close-tab":
             # Close the current tab
             tabs = self.query_one("#tabs", TabbedContent)
             if tabs.active:
-                tabs.remove_pane(tabs.active)
+                self._close_tab_by_id(tabs.active)
 
     def on_input_changed(self, event: Input.Changed):
         """Handle search input changes for database tables."""

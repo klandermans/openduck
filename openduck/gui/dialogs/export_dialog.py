@@ -96,12 +96,19 @@ class ExportDialog(ModalScreen):
                 return
 
             event.button.disabled = True
+            if hasattr(self.app, "set_status"):
+                self.app.set_status("running")
             if self.export_type == "csv":
                 success, error_msg = await asyncio.to_thread(self.export_to_csv, filename)
             else:
                 success, error_msg = await asyncio.to_thread(self.export_to_excel, filename)
 
             event.button.disabled = False
+            if hasattr(self.app, "set_status"):
+                if success and hasattr(self.app, "is_any_query_running") and self.app.is_any_query_running():
+                    self.app.set_status("running")
+                else:
+                    self.app.set_status("done" if success else "error")
             if success:
                 self.app.notify(f"Geëxporteerd naar {filename}", timeout=2.0)
                 self.dismiss({"exported": True, "filename": filename})
