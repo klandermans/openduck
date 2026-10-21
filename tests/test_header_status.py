@@ -227,9 +227,13 @@ class TestHeaderStatus(unittest.TestCase):
         app.set_status("executing")
         self.assertTrue(any("OpenDuck • executing" in s for s in written))
 
-        # Empty string
+        # Empty string and None
         written.clear()
         app.set_status("")
+        self.assertTrue(any("OpenDuck •" in s for s in written))
+
+        written.clear()
+        app.set_status(None)
         self.assertTrue(any("OpenDuck •" in s for s in written))
 
     def test_format_title_empty_or_none(self):
@@ -288,7 +292,12 @@ class TestHeaderStatusAsync(unittest.IsolatedAsyncioTestCase):
 
             # Check in-app header content
             title_widget = headers[0].query_one("HeaderTitle")
+            self.assertEqual(title_widget.styles.text_align, "center")
             self.assertEqual(title_widget._render().plain, "OpenDuck •\ndone")
+            line0 = title_widget.render_line(0)
+            line1 = title_widget.render_line(1)
+            self.assertIn("OpenDuck •", line0.text)
+            self.assertIn("done", line1.text)
 
             # Update to running
             app.set_status("running")

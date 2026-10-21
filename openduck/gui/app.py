@@ -256,7 +256,7 @@ class DuckCLI(App):
             details: Optional extra text (e.g. elapsed time).
         """
         try:
-            clean_status = status.strip()
+            clean_status = (status or "").strip()
             prefixes = ("• ", "•", "● ", "●", "🟢 ", "🟢", "🔴 ", "🔴", "🟡 ", "🟡")
             changed = True
             while changed:

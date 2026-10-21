@@ -2,6 +2,7 @@
 
 APP_CSS = """
 Header { height: 2; }
+HeaderTitle { text-align: center; }
 #sidebar { width: 30; height: 100%; background: $surface; }
 #files { height: 2fr; min-height: 8; }
 #db-tree { height: 1fr; min-height: 8; }
