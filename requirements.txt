@@ -5,3 +5,4 @@ pandas
 openpyxl
 xlrd
 pymssql
+plotext>=5.2.8

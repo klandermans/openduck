@@ -86,7 +86,7 @@ class TestHeaderStatus(unittest.TestCase):
 
         app.set_status("running")
         self.assertEqual(app.sub_title, "running")
-        self.assertTrue(any("OpenDuck • running" in s for s in written))
+        self.assertTrue(any("OpenDuck 🔴 running" in s for s in written))
         self.assertTrue(any("\033]0;" in s for s in written))
         self.assertTrue(any("\033]1;" in s for s in written))
         self.assertTrue(any("\033]2;" in s for s in written))
@@ -102,10 +102,10 @@ class TestHeaderStatus(unittest.TestCase):
 
         app.set_status("done")
         self.assertEqual(app.sub_title, "done")
-        self.assertTrue(any("OpenDuck • done" in s for s in written))
+        self.assertTrue(any("OpenDuck 🟢 done" in s for s in written))
 
     def test_set_status_ready(self):
-        """Setting status to ready should format as OpenDuck • ready."""
+        """Setting status to ready should format as OpenDuck 🟢 ready."""
         app = DuckCLI()
         written = []
 
@@ -115,7 +115,7 @@ class TestHeaderStatus(unittest.TestCase):
 
         app.set_status("ready")
         self.assertEqual(app.sub_title, "ready")
-        self.assertTrue(any("OpenDuck • ready" in s for s in written))
+        self.assertTrue(any("OpenDuck 🟢 ready" in s for s in written))
 
     def test_set_status_error_and_cancelled(self):
         """Setting status to error and cancelled should update subtitle and terminal title."""
@@ -128,11 +128,11 @@ class TestHeaderStatus(unittest.TestCase):
 
         app.set_status("error")
         self.assertEqual(app.sub_title, "error")
-        self.assertTrue(any("OpenDuck • error" in s for s in written))
+        self.assertTrue(any("OpenDuck 🔴 error" in s for s in written))
 
         app.set_status("cancelled")
         self.assertEqual(app.sub_title, "cancelled")
-        self.assertTrue(any("OpenDuck • cancelled" in s for s in written))
+        self.assertTrue(any("OpenDuck 🟡 cancelled" in s for s in written))
 
     def test_set_status_with_details(self):
         """Details should be included in subtitle and terminal title when provided."""
@@ -145,7 +145,7 @@ class TestHeaderStatus(unittest.TestCase):
 
         app.set_status("done", details="0.04s")
         self.assertEqual(app.sub_title, "done (0.04s)")
-        self.assertTrue(any("OpenDuck • done (0.04s)" in s for s in written))
+        self.assertTrue(any("OpenDuck 🟢 done (0.04s)" in s for s in written))
 
     def test_set_status_custom_icon(self):
         """Explicit icon override should take precedence in terminal title."""
@@ -173,19 +173,79 @@ class TestHeaderStatus(unittest.TestCase):
         app._pop_terminal_title()
         self.assertIn("\033[23;0t", written)
 
+    def test_terminal_title_emits_to_driver_and_stdout_and_stderr(self):
+        """_set_terminal_title must emit escape sequences to driver, stdout, and stderr."""
+        app = DuckCLI()
+        mock_driver = MagicMock()
+        mock_stdout = MagicMock()
+        mock_stderr = MagicMock()
+        app._driver = mock_driver
+
+        with patch("sys.__stdout__", mock_stdout), patch("sys.__stderr__", mock_stderr):
+            app._set_terminal_title("OpenDuck • running")
+
+            expected_seq = "\033]0;OpenDuck • running\007\033]1;OpenDuck • running\007\033]2;OpenDuck • running\007"
+            mock_driver.write.assert_called_with(expected_seq)
+            mock_driver.flush.assert_called()
+            mock_stdout.write.assert_called_with(expected_seq)
+            mock_stdout.flush.assert_called()
+            mock_stderr.write.assert_called_with(expected_seq)
+            mock_stderr.flush.assert_called()
+
+    def test_emit_terminal_seq_attempts_dev_tty(self):
+        """_emit_terminal_seq attempts writing to /dev/tty."""
+        from unittest.mock import mock_open
+        app = DuckCLI()
+        m_open = mock_open()
+        with patch("builtins.open", m_open):
+            app._emit_terminal_seq("\033]133;C\007")
+            m_open.assert_called_with("/dev/tty", "w")
+
+    def test_iterm2_shell_integration_osc133_and_osc1337(self):
+        """set_status emits native iTerm2 OSC 133 integration codes and OSC 1337 user variables."""
+        app = DuckCLI()
+        written = []
+        mock_driver = MagicMock()
+        mock_driver.write = written.append
+        app._driver = mock_driver
+
+        # Running status: OSC 133;C and user variable
+        app.set_status("running")
+        self.assertTrue(any("\033]133;C\007" in s for s in written))
+        self.assertTrue(any("\033]1337;SetUserVar=status=" in s for s in written))
+
+        # Done status: OSC 133;D;0
+        written.clear()
+        app.set_status("done")
+        self.assertTrue(any("\033]133;D;0\007" in s for s in written))
+
+        # Error status: OSC 133;D;1
+        written.clear()
+        app.set_status("error")
+        self.assertTrue(any("\033]133;D;1\007" in s for s in written))
+
+        # Cancelled status: OSC 133;D;130
+        written.clear()
+        app.set_status("cancelled")
+        self.assertTrue(any("\033]133;D;130\007" in s for s in written))
+
+
     def test_fallback_stdout_when_driver_is_none(self):
-        """If driver is None, sys.__stdout__ is used if it is a tty."""
+        """If driver is None, sys.__stdout__ and sys.__stderr__ receive sequences."""
         app = DuckCLI()
         app._driver = None
 
         mock_stdout = MagicMock()
-        mock_stdout.isatty.return_value = True
+        mock_stderr = MagicMock()
 
-        with patch("sys.__stdout__", mock_stdout):
+        with patch("sys.__stdout__", mock_stdout), patch("sys.__stderr__", mock_stderr):
             app._set_terminal_title("Test Title")
             mock_stdout.write.assert_called_once()
             self.assertIn("Test Title", mock_stdout.write.call_args[0][0])
             mock_stdout.flush.assert_called_once()
+            mock_stderr.write.assert_called_once()
+            self.assertIn("Test Title", mock_stderr.write.call_args[0][0])
+            mock_stderr.flush.assert_called_once()
 
     def test_set_status_edge_cases(self):
         """set_status handles case insensitivity, prefix stripping, and custom labels."""
@@ -197,44 +257,44 @@ class TestHeaderStatus(unittest.TestCase):
 
         # Prefix stripping
         app.set_status("• running")
-        self.assertTrue(any("OpenDuck • running" in s for s in written))
+        self.assertTrue(any("OpenDuck 🔴 running" in s for s in written))
 
         written.clear()
         app.set_status("● running")
-        self.assertTrue(any("OpenDuck • running" in s for s in written))
+        self.assertTrue(any("OpenDuck 🔴 running" in s for s in written))
 
         written.clear()
         app.set_status("🟢 done")
-        self.assertTrue(any("OpenDuck • done" in s for s in written))
+        self.assertTrue(any("OpenDuck 🟢 done" in s for s in written))
 
         # Uppercase
         written.clear()
         app.set_status("RUNNING")
-        self.assertTrue(any("OpenDuck • RUNNING" in s for s in written))
+        self.assertTrue(any("OpenDuck 🔴 RUNNING" in s for s in written))
 
         # Fail keyword
         written.clear()
         app.set_status("failed")
-        self.assertTrue(any("OpenDuck • failed" in s for s in written))
+        self.assertTrue(any("OpenDuck 🔴 failed" in s for s in written))
 
         # Multiple prefixes
         written.clear()
         app.set_status("● 🟢 done")
-        self.assertTrue(any("OpenDuck • done" in s for s in written))
+        self.assertTrue(any("OpenDuck 🟢 done" in s for s in written))
 
         # Executing status
         written.clear()
         app.set_status("executing")
-        self.assertTrue(any("OpenDuck • executing" in s for s in written))
+        self.assertTrue(any("OpenDuck 🔴 executing" in s for s in written))
 
         # Empty string and None
         written.clear()
         app.set_status("")
-        self.assertTrue(any("OpenDuck •" in s for s in written))
+        self.assertTrue(any("OpenDuck 🟢" in s for s in written))
 
         written.clear()
         app.set_status(None)
-        self.assertTrue(any("OpenDuck •" in s for s in written))
+        self.assertTrue(any("OpenDuck 🟢" in s for s in written))
 
     def test_format_title_empty_or_none(self):
         """format_title should handle empty and None gracefully without crashing."""
@@ -270,8 +330,8 @@ class TestHeaderStatus(unittest.TestCase):
 class TestHeaderStatusAsync(unittest.IsolatedAsyncioTestCase):
     """Async tests with running Textual app pilot."""
 
-    async def test_header_widget_and_status_updates(self):
-        """Header widget must be present in window, and status updates subtitle/tab."""
+    async def test_header_widget_absent_and_status_updates(self):
+        """Header widget must be absent from window, and status updates terminal tab title."""
         app = DuckCLI()
         titles = []
         app._set_terminal_title = titles.append
@@ -280,52 +340,54 @@ class TestHeaderStatusAsync(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.3)
             await pilot.pause()
 
-            # Ensure Header is present in window with show_clock=False and height 2
+            # Ensure Header is present in window and centered
             headers = list(app.query(Header))
             self.assertEqual(len(headers), 1)
-            self.assertFalse(headers[0]._show_clock)
-            self.assertEqual(headers[0].styles.height.value, 2)
-
-            # Initially done
-            self.assertEqual(app.sub_title, "done")
-            self.assertIn("OpenDuck • done", titles)
-
-            # Check in-app header content
             title_widget = headers[0].query_one("HeaderTitle")
             self.assertEqual(title_widget.styles.text_align, "center")
             self.assertEqual(title_widget._render().plain, "OpenDuck •\ndone")
-            line0 = title_widget.render_line(0)
-            line1 = title_widget.render_line(1)
-            self.assertIn("OpenDuck •", line0.text)
-            self.assertIn("done", line1.text)
+
+            # Initially done
+            self.assertEqual(app.sub_title, "done")
+            self.assertIn("OpenDuck 🟢 done", titles)
+
+            from textual.widgets import TabbedContent
+            tabs = app.query_one("#tabs", TabbedContent)
+            tab_widget = tabs.get_tab(tabs.active)
+            self.assertEqual(tab_widget.label_text, "Main • done ✕")
+            self.assertTrue(any("green" in str(getattr(s, "style", "")) for s in tab_widget.label.spans))
 
             # Update to running
             app.set_status("running")
             await pilot.pause()
             self.assertEqual(app.sub_title, "running")
-            self.assertIn("OpenDuck • running", titles)
-            self.assertEqual(title_widget._render().plain, "OpenDuck •\nrunning")
+            self.assertIn("OpenDuck 🔴 running", titles)
+            self.assertEqual(tab_widget.label_text, "Main • running ✕")
+            self.assertTrue(any("red" in str(getattr(s, "style", "")) for s in tab_widget.label.spans))
 
             # Update to cancelled
             app.set_status("cancelled")
             await pilot.pause()
             self.assertEqual(app.sub_title, "cancelled")
-            self.assertIn("OpenDuck • cancelled", titles)
-            self.assertEqual(title_widget._render().plain, "OpenDuck •\ncancelled")
+            self.assertIn("OpenDuck 🟡 cancelled", titles)
+            self.assertEqual(tab_widget.label_text, "Main • cancelled ✕")
+            self.assertTrue(any("yellow" in str(getattr(s, "style", "")) for s in tab_widget.label.spans))
 
             # Update to error
             app.set_status("error")
             await pilot.pause()
             self.assertEqual(app.sub_title, "error")
-            self.assertIn("OpenDuck • error", titles)
-            self.assertEqual(title_widget._render().plain, "OpenDuck •\nerror")
+            self.assertIn("OpenDuck 🔴 error", titles)
+            self.assertEqual(tab_widget.label_text, "Main • error ✕")
+            self.assertTrue(any("red" in str(getattr(s, "style", "")) for s in tab_widget.label.spans))
 
             # Update back to done
             app.set_status("done")
             await pilot.pause()
             self.assertEqual(app.sub_title, "done")
-            self.assertEqual(titles[-1], "OpenDuck • done")
-            self.assertEqual(title_widget._render().plain, "OpenDuck •\ndone")
+            self.assertEqual(titles[-1], "OpenDuck 🟢 done")
+            self.assertEqual(tab_widget.label_text, "Main • done ✕")
+            self.assertTrue(any("green" in str(getattr(s, "style", "")) for s in tab_widget.label.spans))
 
     async def test_action_run_query_status_lifecycle(self):
         """Query execution lifecycle sets running and then done on completion."""
@@ -334,9 +396,9 @@ class TestHeaderStatusAsync(unittest.IsolatedAsyncioTestCase):
 
         orig_set_status = app.set_status
 
-        def tracking_set_status(status, icon=None, details=None):
+        def tracking_set_status(status, *args, **kwargs):
             status_history.append(status)
-            return orig_set_status(status, icon=icon, details=details)
+            return orig_set_status(status, *args, **kwargs)
 
         app.set_status = tracking_set_status
 
@@ -364,6 +426,8 @@ class TestHeaderStatusAsync(unittest.IsolatedAsyncioTestCase):
             self.assertIn("running", status_history)
             self.assertEqual(status_history[-1], "done")
             self.assertEqual(app.sub_title, "done")
+            tab_widget = tabs.get_tab(tabs.active)
+            self.assertEqual(tab_widget.label_text, "Main • done ✕")
 
     async def test_action_run_query_error_status(self):
         """Query with invalid SQL sets status to error."""
@@ -386,6 +450,8 @@ class TestHeaderStatusAsync(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
 
             self.assertEqual(app.sub_title, "error")
+            tab_widget = tabs.get_tab(tabs.active)
+            self.assertEqual(tab_widget.label_text, "Main • error ✕")
 
     async def test_close_tab_with_running_query_resets_status(self):
         """Closing a tab with a running query cancels the task and resets status to done."""
@@ -519,6 +585,8 @@ class TestHeaderStatusAsync(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.05)
 
                 self.assertEqual(app.sub_title, "cancelled")
+                tab_widget = tabs.get_tab(tabs.active)
+                self.assertEqual(tab_widget.label_text, "Main • cancelled ✕")
 
                 # Cancel remaining workers
                 for w in app.workers:
@@ -633,6 +701,139 @@ class TestHeaderStatusAsync(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(app.sub_title, "running")
 
             fake_task.cancel()
+
+    async def test_tab_status_base_name_never_piles_up(self):
+        """Rapid status changes must not cause bullet or status suffixes to pile up in tab label."""
+        app = DuckCLI()
+        async with app.run_test() as pilot:
+            await asyncio.sleep(0.3)
+            await pilot.pause()
+
+            from textual.widgets import TabbedContent
+            tabs = app.query_one("#tabs", TabbedContent)
+            tab_widget = tabs.get_tab(tabs.active)
+
+            for _ in range(3):
+                app.set_status("running")
+                await pilot.pause()
+                self.assertEqual(tab_widget.label_text, "Main • running ✕")
+
+                app.set_status("done")
+                await pilot.pause()
+                self.assertEqual(tab_widget.label_text, "Main • done ✕")
+
+                app.set_status("cancelled")
+                await pilot.pause()
+                self.assertEqual(tab_widget.label_text, "Main • cancelled ✕")
+
+                app.set_status("error")
+                await pilot.pause()
+                self.assertEqual(tab_widget.label_text, "Main • error ✕")
+
+            # Final check that base name is strictly preserved
+            self.assertEqual(tab_widget.label_text, "Main • error ✕")
+            self.assertEqual(app._tab_base_names[tabs.active], "Main")
+
+    async def test_tab_status_with_file_opened(self):
+        """Opening a file updates tab base_name to filename and displays status on tab."""
+        import tempfile
+        from pathlib import Path
+        app = DuckCLI()
+        async with app.run_test() as pilot:
+            await asyncio.sleep(0.3)
+            await pilot.pause()
+
+            from textual.widgets import TabbedContent
+            tabs = app.query_one("#tabs", TabbedContent)
+
+            with tempfile.NamedTemporaryFile(suffix=".csv", mode="w", delete=False) as f:
+                f.write("a,b\n1,2\n3,4\n")
+                temp_path = Path(f.name)
+
+            try:
+                await app._open_file_path(temp_path)
+                await pilot.pause()
+                await asyncio.sleep(0.1)
+                await pilot.pause()
+
+                tab_widget = tabs.get_tab(tabs.active)
+                self.assertEqual(tab_widget.label_text, f"{temp_path.name} • done ✕")
+                self.assertEqual(app._tab_base_names[tabs.active], temp_path.name)
+            finally:
+                temp_path.unlink(missing_ok=True)
+
+    async def test_multitab_independent_status_indicators(self):
+        """Multiple tabs maintain their own independent base names and status labels."""
+        app = DuckCLI()
+        async with app.run_test() as pilot:
+            await asyncio.sleep(0.3)
+            await pilot.pause()
+
+            from textual.widgets import TabbedContent
+            tabs = app.query_one("#tabs", TabbedContent)
+            pane1_id = tabs.active
+
+            # Add second tab
+            await app.add_new_tab("sales.csv", "SELECT 1;", run=False)
+            await pilot.pause()
+            pane2_id = tabs.active
+
+            tab1_widget = tabs.get_tab(pane1_id)
+            tab2_widget = tabs.get_tab(pane2_id)
+
+            self.assertEqual(tab1_widget.label_text, "Main • done ✕")
+            self.assertEqual(tab2_widget.label_text, "sales.csv • done ✕")
+
+            # Set status on active tab (tab 2) to running
+            app.set_status("running")
+            await pilot.pause()
+
+            self.assertEqual(tab2_widget.label_text, "sales.csv • running ✕")
+            # Tab 1 remains unchanged
+            self.assertEqual(tab1_widget.label_text, "Main • done ✕")
+
+    async def test_opening_file_in_new_tab_preserves_existing_tab_status(self):
+        """Opening a file into a new tab does not falsely mark the previous tab as running."""
+        import tempfile
+        from pathlib import Path
+        app = DuckCLI()
+        async with app.run_test() as pilot:
+            await asyncio.sleep(0.3)
+            await pilot.pause()
+
+            from textual.widgets import TabbedContent
+            from openduck.gui.widgets.sql_editor import SqlTextArea
+            tabs = app.query_one("#tabs", TabbedContent)
+            tab1_id = tabs.active
+
+            tab1_editor = app.query_one(f"#{tab1_id}").query_one(SqlTextArea)
+            tab1_editor.text = "SELECT 1;"
+            # Run query in tab 1
+            app.run_worker(app.action_run_query())
+            await pilot.pause()
+            await asyncio.sleep(0.2)
+            await pilot.pause()
+
+            tab1_widget = tabs.get_tab(tab1_id)
+            self.assertEqual(tab1_widget.label_text, "Main • done ✕")
+
+            with tempfile.NamedTemporaryFile(suffix=".csv", mode="w", delete=False) as f:
+                f.write("col_a,col_b\n1,2\n")
+                temp_path = Path(f.name)
+
+            try:
+                await app._open_file_path(temp_path)
+                await pilot.pause()
+                await asyncio.sleep(0.3)
+                await pilot.pause()
+
+                # Tab 1 must remain done, not be mutated to running
+                self.assertEqual(tab1_widget.label_text, "Main • done ✕")
+                # New tab is active and finished query
+                tab2_widget = tabs.get_tab(tabs.active)
+                self.assertEqual(tab2_widget.label_text, f"{temp_path.name} • done ✕")
+            finally:
+                temp_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

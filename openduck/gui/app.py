@@ -1,11 +1,13 @@
 """Main OpenDuck application class."""
 
 import asyncio
+import base64
 from datetime import datetime
 import logging
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import time
 from typing import Optional
@@ -41,6 +43,7 @@ from openduck.core.error_classifier import classify_file_error
 from openduck.core.sql_utils import is_duckdb_file, sql_for_file
 from openduck.gui.dialogs.add_connection_dialog import AddConnectionDialog
 from openduck.gui.dialogs.export_dialog import ExportDialog
+from openduck.gui.dialogs.plot_dialog import PlotDialog
 from openduck.gui.dialogs.save_query_dialog import SaveQueryDialog
 from openduck.gui.screens.about import AboutScreen
 from openduck.gui.styles import APP_CSS
@@ -66,6 +69,7 @@ class DuckCLI(App):
     BINDINGS = [
         ("ctrl+enter,super+enter,cmd+enter,command+enter", "run_query", "Run"),
         ("ctrl+s,super+s,cmd+s,command+s", "save_query", "Save Query"),
+        ("ctrl+t,super+t,cmd+t,command+t", "new_tab", "New Tab"),
         ("f3,ctrl+slash,super+slash,cmd+slash,command+slash,ctrl+underscore,super+underscore,cmd+underscore,command+underscore,ctrl+7,super+7,ctrl+minus,super+minus", "toggle_comment", "Comment (F3)"),
         ("ctrl+z,super+z,cmd+z,command+z", "undo", "Undo"),
         ("ctrl+y,super+y,cmd+y,command+y,shift+ctrl+z,ctrl+shift+z,shift+super+z,super+shift+z,shift+cmd+z,cmd+shift+z,shift+command+z,command+shift+z", "redo", "Redo"),
@@ -80,6 +84,8 @@ class DuckCLI(App):
         self.con = duckdb.connect()
         self.config = load_config()
         self.db_connections: dict = {}
+        self._tab_base_names: dict[str, str] = {}
+        self._tab_counter: int = 0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -129,67 +135,81 @@ class DuckCLI(App):
             ("•", color),
         ]
         if clean_sub:
-            parts.append((f"\n{clean_sub}", color))
+            parts.append((f"\n{lower}", color))
 
         return Content.assemble(*parts)
 
 
+    def _emit_terminal_seq(self, seq: str) -> None:
+        """Emit terminal escape sequence via driver and directly to stdout/stderr and /dev/tty."""
+        driver = getattr(self, "_driver", None)
+        if driver is not None and hasattr(driver, "write"):
+            try:
+                driver.write(seq)
+                if hasattr(driver, "flush"):
+                    driver.flush()
+            except Exception:
+                pass
+        for stream in (sys.__stdout__, sys.__stderr__):
+            try:
+                if stream and hasattr(stream, "write"):
+                    stream.write(seq)
+                    if hasattr(stream, "flush"):
+                        stream.flush()
+            except Exception:
+                pass
+        try:
+            with open("/dev/tty", "w") as tty:
+                tty.write(seq)
+                tty.flush()
+        except Exception:
+            pass
+
     def _set_terminal_title(self, title: str) -> None:
         """Set terminal tab and window title using OSC 0, OSC 1 and OSC 2 escape sequences."""
         seq = f"\033]0;{title}\007\033]1;{title}\007\033]2;{title}\007"
-        driver = getattr(self, "_driver", None)
-        if driver is not None and hasattr(driver, "write"):
+        self._emit_terminal_seq(seq)
+        if (
+            sys.platform == "darwin"
+            and os.environ.get("TERM_PROGRAM") == "iTerm.app"
+            and getattr(sys.stdout, "isatty", lambda: False)()
+            and "unittest" not in sys.modules
+        ):
             try:
-                driver.write(seq)
-                if hasattr(driver, "flush"):
-                    driver.flush()
-                return
+                tty_path = None
+                try:
+                    tty_path = os.ttyname(sys.stdout.fileno())
+                except Exception:
+                    pass
+                escaped_title = title.replace('"', '\\"')
+                if tty_path:
+                    script = (
+                        f'tell application "iTerm"\n'
+                        f'  repeat with w in windows\n'
+                        f'    repeat with t in tabs of w\n'
+                        f'      repeat with s in sessions of t\n'
+                        f'        if (tty of s) is "{tty_path}" then\n'
+                        f'          tell s to set name to "{escaped_title}"\n'
+                        f'          return\n'
+                        f'        end if\n'
+                        f'      end repeat\n'
+                        f'    end repeat\n'
+                        f'  end repeat\n'
+                        f'end tell'
+                    )
+                else:
+                    script = f'tell application "iTerm" to tell current session of current window to set name to "{escaped_title}"'
+                subprocess.Popen(["osascript", "-e", script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception:
                 pass
-        try:
-            if sys.__stdout__ and sys.__stdout__.isatty():
-                sys.__stdout__.write(seq)
-                sys.__stdout__.flush()
-        except Exception:
-            pass
 
     def _push_terminal_title(self) -> None:
         """Save terminal window/tab title to stack."""
-        seq = "\033[22;0t"
-        driver = getattr(self, "_driver", None)
-        if driver is not None and hasattr(driver, "write"):
-            try:
-                driver.write(seq)
-                if hasattr(driver, "flush"):
-                    driver.flush()
-                return
-            except Exception:
-                pass
-        try:
-            if sys.__stdout__ and sys.__stdout__.isatty():
-                sys.__stdout__.write(seq)
-                sys.__stdout__.flush()
-        except Exception:
-            pass
+        self._emit_terminal_seq("\033[22;0t")
 
     def _pop_terminal_title(self) -> None:
         """Restore previous terminal window/tab title from stack."""
-        seq = "\033[23;0t"
-        driver = getattr(self, "_driver", None)
-        if driver is not None and hasattr(driver, "write"):
-            try:
-                driver.write(seq)
-                if hasattr(driver, "flush"):
-                    driver.flush()
-                return
-            except Exception:
-                pass
-        try:
-            if sys.__stdout__ and sys.__stdout__.isatty():
-                sys.__stdout__.write(seq)
-                sys.__stdout__.flush()
-        except Exception:
-            pass
+        self._emit_terminal_seq("\033[23;0t")
 
     def is_any_query_running(
         self,
@@ -232,6 +252,8 @@ class DuckCLI(App):
         except Exception:
             pass
 
+        self._tab_base_names.pop(pane_id, None)
+
         try:
             tabs = self.query_one("#tabs", TabbedContent)
             tabs.remove_pane(pane_id)
@@ -242,18 +264,89 @@ class DuckCLI(App):
         if not self.is_any_query_running(exclude_pane_id=pane_id):
             self.set_status("done")
 
+    def _clean_base_name(self, raw: str) -> str:
+        """Extract clean base name from tab label, removing prefixes, status and close button."""
+        s = (raw or "").strip()
+        if s.endswith("✕"):
+            s = s[:-1].strip()
+        if "•" in s:
+            s = s.split("•")[0].strip()
+        if "●" in s:
+            s = s.split("●")[0].strip()
+        for prefix in ("❌ ", "❌", "🟢 ", "🟢", "🔴 ", "🔴", "🟡 ", "🟡"):
+            if s.startswith(prefix):
+                s = s[len(prefix):].strip()
+        return s or "Main"
+
+    def _update_tab_label(self, pane_id: str, status: str, icon: Optional[str] = None) -> None:
+        """Update a specific tab's ContentTab label with status indicator."""
+        try:
+            tabs = self.query_one("#tabs", TabbedContent)
+            tab_widget = tabs.get_tab(pane_id)
+            if tab_widget is None:
+                return
+
+            base_name = self._tab_base_names.get(pane_id)
+            if not base_name:
+                raw_label = getattr(tab_widget, "label_text", str(getattr(tab_widget, "label", "")))
+                base_name = self._clean_base_name(raw_label)
+                self._tab_base_names[pane_id] = base_name
+
+            clean_status = (status or "").strip()
+            prefixes = ("• ", "•", "● ", "●", "🟢 ", "🟢", "🔴 ", "🔴", "🟡 ", "🟡")
+            changed = True
+            while changed:
+                changed = False
+                for prefix in prefixes:
+                    if clean_status.startswith(prefix):
+                        clean_status = clean_status[len(prefix):].strip()
+                        changed = True
+                        break
+
+            status_lower = clean_status.lower()
+            if any(w in status_lower for w in ("done", "ready", "success")):
+                status_color = "green"
+            elif any(w in status_lower for w in ("running", "executing", "error", "failed")):
+                status_color = "red"
+            elif any(w in status_lower for w in ("cancelled", "cancel", "warn")):
+                status_color = "yellow"
+            else:
+                status_color = "white"
+
+            dot = icon if icon is not None else "•"
+
+            if clean_status:
+                new_label = Content.from_markup(
+                    f"{base_name} [{status_color}]{dot} {clean_status}[/{status_color}] ✕"
+                )
+            else:
+                new_label = Content.from_markup(f"{base_name} ✕")
+
+            tab_widget.label = new_label
+            try:
+                pane = self.query_one(f"#{pane_id}", TabPane)
+                pane._title = new_label
+            except Exception:
+                pass
+        except Exception as e:
+            logger.debug(f"Error updating tab label for {pane_id}: {e}")
+
     def set_status(
         self,
         status: str,
         icon: Optional[str] = None,
         details: Optional[str] = None,
+        pane_id: Optional[str] = None,
+        *args,
+        **kwargs,
     ) -> None:
-        """Update execution status in terminal tab/window title.
+        """Update execution status in terminal tab/window title and active ContentTab.
 
         Args:
             status: Status name, e.g. 'running', 'done', 'ready', 'error', 'cancelled'.
             icon: Optional icon override. Defaults to bullet '•'.
             details: Optional extra text (e.g. elapsed time).
+            pane_id: Optional tab pane ID to update. If None, the active tab is updated.
         """
         try:
             clean_status = (status or "").strip()
@@ -267,13 +360,52 @@ class DuckCLI(App):
                         changed = True
                         break
 
-            dot = icon if icon is not None else "•"
-
             label = f"{clean_status} ({details})" if details else clean_status
             self.sub_title = label
 
+            status_lower = clean_status.lower()
+            if any(w in status_lower for w in ("running", "executing")):
+                default_icon = "🔴"
+            elif any(w in status_lower for w in ("cancel", "cancelled")):
+                default_icon = "🟡"
+            elif any(w in status_lower for w in ("error", "failed")):
+                default_icon = "🔴"
+            else:
+                default_icon = "🟢"
+
+            dot = icon if icon is not None else default_icon
             term_title = f"{self.TITLE} {dot} {label}".strip() if label else f"{self.TITLE} {dot}"
             self._set_terminal_title(term_title)
+
+            # iTerm2 OSC 133 shell integration and OSC 1337 user variables
+            osc_seqs = []
+            status_lower = clean_status.lower()
+            if any(w in status_lower for w in ("running", "executing")):
+                osc_seqs.append("\033]133;C\007")
+            elif any(w in status_lower for w in ("cancel", "cancelled")):
+                osc_seqs.append("\033]133;D;130\007")
+            elif any(w in status_lower for w in ("error", "failed")):
+                osc_seqs.append("\033]133;D;1\007")
+            else:
+                osc_seqs.append("\033]133;D;0\007")
+
+            try:
+                b64_status = base64.b64encode(clean_status.encode("utf-8")).decode("ascii")
+                osc_seqs.append(f"\033]1337;SetUserVar=status={b64_status}\007")
+            except Exception:
+                pass
+
+            if osc_seqs:
+                self._emit_terminal_seq("".join(osc_seqs))
+
+            # Update ContentTab label
+            try:
+                tabs = self.query_one("#tabs", TabbedContent)
+                target_pane_id = pane_id or tabs.active
+                if target_pane_id:
+                    self._update_tab_label(target_pane_id, clean_status, icon=icon)
+            except Exception:
+                pass
         except Exception as e:
             logger.debug(f"Error updating status: {e}")
 
@@ -457,13 +589,48 @@ class DuckCLI(App):
         except Exception:
             pass
 
+    def _is_tab_empty_and_unsaved(self, pane_id: str) -> bool:
+        """Check if a tab has no query content, no results, and is an unsaved placeholder."""
+        try:
+            pane = self.query_one(f"#{pane_id}", TabPane)
+            qtab = pane.query_one(QueryTab)
+            # Check running task
+            task = getattr(qtab, "running_task", None)
+            if task and not task.done():
+                return False
+            # Check editor content
+            try:
+                editor = qtab.query_one(SqlTextArea)
+            except Exception:
+                editor = qtab.query_one(TextArea)
+            if editor.text.strip():
+                return False
+            # Check query results
+            if getattr(qtab, "full_data", None) and len(qtab.full_data) > 0:
+                return False
+            # Check if saved
+            base_name = self._tab_base_names.get(pane_id, "")
+            saved_names = {q.get("name") for q in self.config.get("saved_queries", []) if isinstance(q, dict)}
+            if base_name in saved_names:
+                return False
+            return base_name in ("Main", "New Tab", "Untitled", "")
+        except Exception:
+            return False
+
     async def add_new_tab(self, name: str, sql: str, run: bool = False, connection_id: str = None):
         tabs = self.query_one("#tabs", TabbedContent)
-        tab_id = f"t{int(datetime.now().timestamp() * 1000)}"
-        await tabs.add_pane(TabPane(f"{name} ✕", QueryTab(sql, connection_id=connection_id), id=tab_id))
+        self._tab_counter += 1
+        tab_id = f"t{int(datetime.now().timestamp() * 1000)}_{self._tab_counter}"
+        clean_name = self._clean_base_name(name)
+        self._tab_base_names[tab_id] = clean_name
+        initial_status = "running" if run else "done"
+        color = "red" if run else "green"
+        pane_label = Content.from_markup(f"{clean_name} [{color}]• {initial_status}[/{color}] ✕")
+        await tabs.add_pane(TabPane(pane_label, QueryTab(sql, connection_id=connection_id), id=tab_id))
         tabs.active = tab_id
+        self.set_status(initial_status, pane_id=tab_id)
         if run:
-            self.set_timer(0.1, self.action_run_query)
+            self.set_timer(0.1, lambda: self.run_worker(self.action_run_query(pane_id=tab_id)))
 
     def _classify_file_error(self, e: Exception, file_path: str = "") -> str:
         """Classify file-related errors and return user-friendly message."""
@@ -483,12 +650,13 @@ class DuckCLI(App):
         await asyncio.to_thread(do_register)
         return table_name
 
-    async def action_run_query(self):
+    async def action_run_query(self, pane_id: Optional[str] = None):
         tabs = self.query_one("#tabs", TabbedContent)
-        if not tabs.active:
+        tab_pane_id = pane_id or tabs.active
+        if not tab_pane_id:
             logger.debug("No active tab found")
             return
-        tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
+        tab = self.query_one(f"#{tab_pane_id}").query_one(QueryTab)
         editor = tab.query_one(SqlTextArea)
 
         # Execute selected text if any is selected (like VS Code / DBeaver)
@@ -535,7 +703,10 @@ class DuckCLI(App):
         meta = tab.query_one("#metadata-bar")
         tbl.loading = True
         meta.update("Executing...")
-        self.set_status("running")
+        tab.last_status = "running"
+        self._update_tab_label(tab_pane_id, "running")
+        if tabs.active == tab_pane_id:
+            self.set_status("running", pane_id=tab_pane_id)
         logger.debug("Query execution started, task tracked")
 
         conn_id = tab.connection_id
@@ -589,12 +760,16 @@ class DuckCLI(App):
             rows_label = f"{MAX_UI_ROWS}+ (truncated)" if is_truncated else str(len(data))
             meta.update(f"Rows: {rows_label} | Time: {duration:.4f}s{conn_label} | Finished: {datetime.now().strftime('%H:%M:%S')}")
             logger.debug(f"Query completed successfully: {len(data)} rows in {duration:.4f}s")
+            tab.last_status = "done"
+            self._update_tab_label(tab_pane_id, "done")
             if not self.is_any_query_running(exclude_task=current_task):
                 self.set_status("done")
         except (asyncio.CancelledError, getattr(duckdb, "InterruptException", ())):
             logger.debug("Query was cancelled")
             if tab.running_task is current_task:
                 meta.update("Query cancelled")
+                tab.last_status = "cancelled"
+                self._update_tab_label(tab_pane_id, "cancelled")
                 if not self.is_any_query_running(exclude_task=current_task):
                     self.set_status("cancelled")
         except Exception as e:
@@ -620,6 +795,8 @@ class DuckCLI(App):
 
                 tbl.add_row(error_message)
                 meta.update("Error occurred")
+                tab.last_status = "error"
+                self._update_tab_label(tab_pane_id, "error")
                 if not self.is_any_query_running(exclude_task=current_task):
                     self.set_status("error")
         finally:
@@ -764,7 +941,6 @@ class DuckCLI(App):
         """Handle opening a file from the file explorer: load into active tab or create new tab."""
         if not is_duckdb_file(file_path):
             return
-        self.set_status("running")
         try:
             suffix = file_path.suffix.lower()
             if suffix in {".xlsx", ".xls"}:
@@ -780,40 +956,54 @@ class DuckCLI(App):
                     self.set_status("done")
                 return
 
-            if tabs.active:
+            if tabs.active and self._is_tab_empty_and_unsaved(tabs.active):
+                active_id = tabs.active
+                self._tab_base_names[active_id] = file_path.name
                 self.load_query_in_current_tab(sql)
-                try:
-                    active_pane = self.query_one(f"#{tabs.active}", TabPane)
-                    active_pane._title = f"{file_path.name} ✕"
-                    content_tabs = tabs.get_child_by_type(ContentTabs)
-                    target_id = f"--content-tab-{tabs.active}"
-                    for ct in content_tabs.query(ContentTab):
-                        if ct.id == target_id:
-                            ct.label = f"{file_path.name} ✕"
-                            break
-                except Exception:
-                    pass
-                self.run_worker(self.action_run_query())
+                self.set_status("running", pane_id=active_id)
+                self.run_worker(self.action_run_query(pane_id=active_id))
             else:
                 await self.add_new_tab(file_path.name, sql, run=True)
         except Exception as e:
             logger.error(f"Error opening file {file_path}: {str(e)}")
-            self.set_status("error")
             error_msg = self._classify_file_error(e, str(file_path))
             error_sql = f"-- Error opening file: {file_path.name}\n-- {error_msg}"
             try:
                 tabs = self.query_one("#tabs", TabbedContent)
-                if tabs.active:
+                if tabs.active and self._is_tab_empty_and_unsaved(tabs.active):
+                    active_id = tabs.active
+                    self._tab_base_names[active_id] = file_path.name
                     self.load_query_in_current_tab(error_sql)
+                    self.set_status("error", pane_id=active_id)
                 else:
-                    await self.add_new_tab(f"❌ {file_path.name}", error_sql, run=False)
+                    await self.add_new_tab(file_path.name, error_sql, run=False)
+                    self.set_status("error", pane_id=tabs.active)
             except Exception:
-                pass
+                self.set_status("error")
 
     async def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected):
         await self._open_file_path(Path(event.path))
 
     on_duck_tree_file_selected = on_directory_tree_file_selected
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        """Sync status and terminal title when user switches tabs."""
+        try:
+            pane_id = event.pane.id if event.pane else event.tabbed_content.active
+            if pane_id:
+                pane = self.query_one(f"#{pane_id}", TabPane)
+                qtab = pane.query_one(QueryTab)
+                task = getattr(qtab, "running_task", None)
+                if task and not task.done():
+                    self.set_status("running", pane_id=pane_id)
+                elif hasattr(qtab, "last_status"):
+                    self.set_status(qtab.last_status, pane_id=pane_id)
+                elif self.is_any_query_running():
+                    self.set_status("running", pane_id=pane_id)
+                else:
+                    self.set_status("done", pane_id=pane_id)
+        except Exception:
+            pass
 
     def copy_to_clipboard(self, text: str) -> None:
         copy_to_system_clipboard(text)
@@ -904,11 +1094,15 @@ class DuckCLI(App):
             logger.error(f"Error executing redo: {e}")
 
     def on_key(self, event) -> None:
-        """Global key handler for undo/redo shortcuts when focus is outside the editor."""
+        """Global key handler for shortcuts when focus is outside the editor."""
         if len(self.screen_stack) > 1:
             return
         key = (event.key or "").lower()
-        if key in ("super+z", "cmd+z", "command+z", "ctrl+z"):
+        if key in ("super+t", "cmd+t", "command+t", "ctrl+t"):
+            self.action_new_tab()
+            event.stop()
+            event.prevent_default()
+        elif key in ("super+z", "cmd+z", "command+z", "ctrl+z"):
             self.action_undo()
             event.stop()
             event.prevent_default()
@@ -920,6 +1114,10 @@ class DuckCLI(App):
             self.action_redo()
             event.stop()
             event.prevent_default()
+
+    def action_new_tab(self):
+        """Open a new empty tab."""
+        return self.run_worker(self.add_new_tab("New Tab", ""))
 
     def action_close_tab(self):
         tabs = self.query_one("#tabs", TabbedContent)
@@ -974,10 +1172,29 @@ class DuckCLI(App):
             if sql:
                 self.load_query_in_current_tab(sql)
 
+    def action_plot(self) -> None:
+        """Open plot dialog for current tab."""
+        tabs = self.query_one("#tabs", TabbedContent)
+        if not tabs.active:
+            return
+
+        tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
+        if not tab.full_data or not tab.column_names:
+            meta = tab.query_one("#metadata-bar") if tab else None
+            if meta:
+                meta.update("No data to plot")
+            self.notify("No data to plot. Run a query first.", severity="warning")
+            return
+
+        self.push_screen(PlotDialog(tab))
+
     def on_button_pressed(self, event: Button.Pressed):
         """Handle button presses."""
         if event.button.id == "btn-run-query":
             self.run_worker(self.action_run_query())
+            return
+        elif event.button.id == "btn-plot":
+            self.action_plot()
             return
         elif event.button.id == "btn-comment":
             self.action_toggle_comment()

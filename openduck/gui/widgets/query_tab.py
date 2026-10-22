@@ -39,6 +39,7 @@ class QueryTab(Vertical):
             yield ResultsTable(id="results-table")
             with Vertical(id="export-sidebar"):
                 yield Button("▶ Run", id="btn-run-query", classes="export-btn", variant="primary", tooltip="Run query / selection (Ctrl+Enter)")
+                yield Button("📊 Plot", id="btn-plot", classes="export-btn", tooltip="Plot results with plotext")
                 yield Button("💬 --", id="btn-comment", classes="export-btn", tooltip="Toggle comment (F3 / Cmd+/)")
                 yield Button("↓CSV", id="export-csv", classes="export-btn")
                 yield Button("↓XLSX", id="export-excel", classes="export-btn")

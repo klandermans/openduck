@@ -27,6 +27,7 @@ from openduck.gui.screens.matrix import MatrixScreen
 from openduck.gui.dialogs.save_query_dialog import SaveQueryDialog
 from openduck.gui.dialogs.export_dialog import ExportDialog
 from openduck.gui.dialogs.add_connection_dialog import AddConnectionDialog
+from openduck.gui.dialogs.plot_dialog import PlotDialog
 from openduck.gui.widgets.file_tree import DuckTree
 from openduck.gui.widgets.database_tree import DatabaseTree
 from openduck.gui.widgets.sql_editor import SqlTextArea
@@ -61,6 +62,7 @@ __all__ = [
     "SaveQueryDialog",
     "ExportDialog",
     "AddConnectionDialog",
+    "PlotDialog",
     "DuckTree",
     "DatabaseTree",
     "SqlTextArea",

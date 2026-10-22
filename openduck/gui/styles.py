@@ -49,6 +49,16 @@ AboutScreen { align: center middle; background: rgba(0, 0, 0, 0.7); }
 #conn-dialog-title { text-style: bold; margin-bottom: 1; text-align: center; }
 #conn-status { height: 1; margin-top: 1; }
 AddConnectionDialog { align: center middle; background: rgba(0, 0, 0, 0.7); }
+PlotDialog { align: center middle; background: rgba(0, 0, 0, 0.7); }
+#plot-modal { width: 90%; height: 90%; background: $surface; border: tall $primary; padding: 1 2; }
+#plot-dialog-title { text-style: bold; margin-bottom: 1; text-align: center; }
+#plot-controls { height: auto; margin-bottom: 1; }
+.plot-control-col { width: 1fr; margin: 0 1; height: auto; }
+.plot-label { text-style: bold; color: $accent; margin-bottom: 0; }
+#plot-actions { height: auto; margin-bottom: 1; align-vertical: middle; }
+#plot-status { padding-left: 2; color: $text-muted; }
+#plot-output-container { height: 1fr; border: round $primary; background: $panel; overflow: auto auto; padding: 1; }
+#plot-output { width: auto; height: auto; }
 """
 
 MATRIX_CSS = """
