@@ -13,11 +13,10 @@
 
 ---
 
-<p align="center">
-  <img width="100%" alt="OpenDuck Interface" src="https://github.com/user-attachments/assets/4aea9df6-6f00-494d-a171-d76a9a3b8133" />
-</p>
-
-**OpenDuck** is a terminal-based flat file SQL client based on DuckDB. Effortlessly browse files, inspect datasets, write queries with full syntax highlighting, sort and filter millions of rows in milliseconds, and export results — all without leaving your shell.
+> 🦀 **Rust + Ratatui Edition (`rust-ratatui` branch)**:
+> This branch provides a high-performance native Rust version of OpenDuck built with [Ratatui](https://ratatui.rs) and DuckDB.
+> - **Run**: `cargo run`
+> - **Test**: `cargo test`
 
 ---
 

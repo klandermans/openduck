@@ -17,6 +17,7 @@ build/
 dist/
 *.build/
 *.dist/
+target/
 
 # Local data & logs
 openduck.json
