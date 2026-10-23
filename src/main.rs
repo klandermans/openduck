@@ -21,6 +21,18 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use crate::app::App;
 
 fn main() -> Result<()> {
+    // Panic hook to guarantee terminal restoration even on panic
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            std::io::stdout(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        );
+        original_hook(panic_info);
+    }));
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -58,10 +70,16 @@ fn run_app<B: ratatui::backend::Backend>(
         terminal.draw(|f| ui::render(f, app))?;
 
         if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    app.handle_key(key)?;
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind == KeyEventKind::Press {
+                        app.handle_key(key)?;
+                    }
                 }
+                Event::Mouse(mouse) => {
+                    app.handle_mouse(mouse)?;
+                }
+                _ => {}
             }
         }
 

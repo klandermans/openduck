@@ -18,11 +18,14 @@ impl Default for Editor {
 
 impl Editor {
     pub fn new(text: &str) -> Self {
-        let lines: Vec<String> = if text.is_empty() {
+        let mut lines: Vec<String> = if text.is_empty() {
             vec![String::new()]
         } else {
             text.lines().map(|s| s.to_string()).collect()
         };
+        if text.ends_with('\n') {
+            lines.push(String::new());
+        }
         Self {
             lines,
             cursor_row: 0,
@@ -39,11 +42,15 @@ impl Editor {
 
     pub fn set_text(&mut self, text: &str) {
         self.push_undo();
-        self.lines = if text.is_empty() {
+        let mut lines: Vec<String> = if text.is_empty() {
             vec![String::new()]
         } else {
             text.lines().map(|s| s.to_string()).collect()
         };
+        if text.ends_with('\n') {
+            lines.push(String::new());
+        }
+        self.lines = lines;
         self.cursor_row = 0;
         self.cursor_col = 0;
         self.scroll_offset = 0;
@@ -97,6 +104,11 @@ impl Editor {
 
     pub fn insert_newline(&mut self) {
         self.push_undo();
+        if self.cursor_row >= self.lines.len() {
+            self.lines.push(String::new());
+            self.cursor_row = self.lines.len() - 1;
+        }
+
         let line = &self.lines[self.cursor_row];
         let chars: Vec<char> = line.chars().collect();
         let col = self.cursor_col.min(chars.len());
@@ -136,6 +148,9 @@ impl Editor {
     }
 
     pub fn delete(&mut self) {
+        if self.cursor_row >= self.lines.len() {
+            return;
+        }
         let line_len = self.lines[self.cursor_row].chars().count();
         if self.cursor_col < line_len {
             self.push_undo();

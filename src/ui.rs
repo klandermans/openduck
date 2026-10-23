@@ -84,13 +84,38 @@ fn render_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
 
-    let file_items: Vec<ListItem> = app
-        .file_tree
-        .items
+    let files_title = format!(
+        " [1] Files ({}/{}) ",
+        if app.file_tree.items.is_empty() { 0 } else { app.file_tree.selected_index + 1 },
+        app.file_tree.items.len()
+    );
+
+    let files_block = Block::default()
+        .title(files_title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(file_border_style);
+
+    let inner_files = files_block.inner(sidebar_chunks[0]);
+    let f_height = inner_files.height as usize;
+    let f_selected = app.file_tree.selected_index;
+    let f_scroll = if f_selected < app.file_tree.scroll_offset {
+        f_selected
+    } else if f_height > 0 && f_selected >= app.file_tree.scroll_offset + f_height {
+        f_selected + 1 - f_height
+    } else {
+        app.file_tree.scroll_offset
+    };
+    app.file_tree.scroll_offset = f_scroll;
+    let f_start = f_scroll.min(app.file_tree.items.len());
+    let f_end = (f_start + f_height).min(app.file_tree.items.len());
+
+    let file_items: Vec<ListItem> = app.file_tree.items[f_start..f_end]
         .iter()
         .enumerate()
         .map(|(i, item)| {
-            let selected = i == app.file_tree.selected_index;
+            let actual_idx = f_start + i;
+            let selected = actual_idx == f_selected;
             let (icon, style) = if item.is_dir {
                 ("📁 ", Style::default().fg(Color::Blue))
             } else if item.is_supported {
@@ -114,12 +139,6 @@ fn render_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let files_block = Block::default()
-        .title(" [1] Files ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(file_border_style);
-
     let files_list = List::new(file_items).block(files_block);
     f.render_widget(files_list, sidebar_chunks[0]);
 
@@ -130,13 +149,38 @@ fn render_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
 
-    let saved_items: Vec<ListItem> = app
-        .config
-        .saved_queries
+    let saved_title = format!(
+        " [2] Saved Queries ({}/{}) ",
+        if app.config.saved_queries.is_empty() { 0 } else { app.saved_queries_index + 1 },
+        app.config.saved_queries.len()
+    );
+
+    let saved_block = Block::default()
+        .title(saved_title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(saved_border_style);
+
+    let inner_saved = saved_block.inner(sidebar_chunks[1]);
+    let s_height = inner_saved.height as usize;
+    let s_selected = app.saved_queries_index;
+    let s_scroll = if s_selected < app.saved_queries_scroll {
+        s_selected
+    } else if s_height > 0 && s_selected >= app.saved_queries_scroll + s_height {
+        s_selected + 1 - s_height
+    } else {
+        app.saved_queries_scroll
+    };
+    app.saved_queries_scroll = s_scroll;
+    let s_start = s_scroll.min(app.config.saved_queries.len());
+    let s_end = (s_start + s_height).min(app.config.saved_queries.len());
+
+    let saved_items: Vec<ListItem> = app.config.saved_queries[s_start..s_end]
         .iter()
         .enumerate()
         .map(|(i, q)| {
-            let selected = i == app.saved_queries_index;
+            let actual_idx = s_start + i;
+            let selected = actual_idx == s_selected;
             let style = if selected && is_focused && app.sidebar_section == SidebarSection::SavedQueries {
                 Style::default().fg(Color::Magenta).bg(Color::Rgb(40, 30, 50)).add_modifier(Modifier::BOLD)
             } else {
@@ -150,12 +194,6 @@ fn render_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let saved_block = Block::default()
-        .title(" [2] Saved Queries ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(saved_border_style);
-
     let saved_list = List::new(saved_items).block(saved_block);
     f.render_widget(saved_list, sidebar_chunks[1]);
 
@@ -166,22 +204,46 @@ fn render_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
 
-    let history_items: Vec<ListItem> = app
-        .config
-        .history
+    let history_title = format!(
+        " [3] History ({}/{}) ",
+        if app.config.history.is_empty() { 0 } else { app.history_index + 1 },
+        app.config.history.len()
+    );
+
+    let history_block = Block::default()
+        .title(history_title)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(history_border_style);
+
+    let inner_hist = history_block.inner(sidebar_chunks[2]);
+    let h_height = inner_hist.height as usize;
+    let h_selected = app.history_index;
+    let h_scroll = if h_selected < app.history_scroll {
+        h_selected
+    } else if h_height > 0 && h_selected >= app.history_scroll + h_height {
+        h_selected + 1 - h_height
+    } else {
+        app.history_scroll
+    };
+    app.history_scroll = h_scroll;
+
+    let history_reversed: Vec<_> = app.config.history.iter().rev().collect();
+    let h_start = h_scroll.min(history_reversed.len());
+    let h_end = (h_start + h_height).min(history_reversed.len());
+
+    let history_items: Vec<ListItem> = history_reversed[h_start..h_end]
         .iter()
-        .rev()
-        .take(30)
         .enumerate()
         .map(|(i, h)| {
-            let selected = i == app.history_index;
+            let actual_idx = h_start + i;
+            let selected = actual_idx == h_selected;
             let style = if selected && is_focused && app.sidebar_section == SidebarSection::History {
                 Style::default().fg(Color::Cyan).bg(Color::Rgb(30, 45, 60)).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
             let prefix = if selected { "▶ " } else { "  " };
-            // First line or truncated SQL
             let first_line = h.sql.lines().next().unwrap_or("").trim();
             ListItem::new(Line::from(vec![
                 Span::raw(prefix),
@@ -189,12 +251,6 @@ fn render_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             ]))
         })
         .collect();
-
-    let history_block = Block::default()
-        .title(" [3] History ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(history_border_style);
 
     let history_list = List::new(history_items).block(history_block);
     f.render_widget(history_list, sidebar_chunks[2]);
@@ -270,9 +326,18 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
     // Calculate viewable lines based on inner_area height
     let height = inner_area.height as usize;
     let cursor_row = tab.editor.cursor_row;
+    let cursor_col = tab.editor.cursor_col;
 
     let start_row = if cursor_row >= height {
         cursor_row.saturating_sub(height - 1)
+    } else {
+        0
+    };
+
+    let line_no_width = 6usize;
+    let code_width = (inner_area.width as usize).saturating_sub(line_no_width).max(1);
+    let col_offset = if cursor_col >= code_width {
+        cursor_col + 1 - code_width
     } else {
         0
     };
@@ -288,19 +353,24 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
         );
 
         let mut spans = vec![num_span];
+        let chars: Vec<char> = line_text.chars().collect();
 
         if is_current_line {
-            // Highlight cursor position
-            let cursor_col = tab.editor.cursor_col;
-            let chars: Vec<char> = line_text.chars().collect();
-            let before: String = chars[..cursor_col.min(chars.len())].iter().collect();
-            let cursor_char = if cursor_col < chars.len() {
-                chars[cursor_col].to_string()
+            let vis_cursor_col = cursor_col.saturating_sub(col_offset);
+            let window: Vec<char> = if col_offset < chars.len() {
+                chars[col_offset..chars.len().min(col_offset + code_width)].to_vec()
+            } else {
+                Vec::new()
+            };
+
+            let before: String = window[..vis_cursor_col.min(window.len())].iter().collect();
+            let cursor_char = if vis_cursor_col < window.len() {
+                window[vis_cursor_col].to_string()
             } else {
                 " ".to_string()
             };
-            let after: String = if cursor_col + 1 < chars.len() {
-                chars[cursor_col + 1..].iter().collect()
+            let after: String = if vis_cursor_col + 1 < window.len() {
+                window[vis_cursor_col + 1..].iter().collect()
             } else {
                 String::new()
             };
@@ -312,7 +382,12 @@ fn render_editor(f: &mut Frame, app: &App, area: Rect) {
             ));
             spans.push(format_sql_span(&after));
         } else {
-            spans.push(format_sql_span(line_text));
+            let window: String = if col_offset < chars.len() {
+                chars[col_offset..chars.len().min(col_offset + code_width)].iter().collect()
+            } else {
+                String::new()
+            };
+            spans.push(format_sql_span(&window));
         }
 
         lines.push(Line::from(spans));
@@ -343,9 +418,9 @@ fn render_toolbar(f: &mut Frame, _app: &App, area: Rect) {
     f.render_widget(p, area);
 }
 
-fn render_table(f: &mut Frame, app: &App, area: Rect) {
-    let tab = app.current_tab();
+fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     let is_focused = app.focus == Focus::Table;
+    let tab = app.current_tab_mut();
 
     let border_style = if is_focused {
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
@@ -357,7 +432,17 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
         " Results Table [{} rows, {} cols] {} ",
         tab.table.row_count(),
         tab.table.col_count(),
-        if is_focused { "(Active: Arrows to navigate, 's' sort, 'c' copy cell, 'r' copy row)" } else { "" }
+        if is_focused {
+            format!(
+                "(Row {}/{}, Col {}/{}) [Arrows: nav, s: sort, c: cell, r: row, a: tsv]",
+                if tab.table.rows.is_empty() { 0 } else { tab.table.selected_row + 1 },
+                tab.table.row_count(),
+                if tab.table.columns.is_empty() { 0 } else { tab.table.selected_col + 1 },
+                tab.table.col_count()
+            )
+        } else {
+            String::new()
+        }
     );
 
     let block = Block::default()
@@ -384,15 +469,25 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // Prepare table headers
-    let header_cells = tab.table.columns.iter().enumerate().map(|(i, col)| {
-        let sort_icon = if tab.table.sort_col == Some(i) {
+    let visible_height = inner_area.height.saturating_sub(2) as usize;
+    let col_width = 16u16;
+
+    let (start_row, end_row, start_col, end_col) =
+        tab.table.visible_slice(visible_height, col_width, inner_area.width);
+
+    tab.table.scroll_row = start_row;
+    tab.table.scroll_col = start_col;
+
+    // Prepare table headers for visible slice
+    let header_cells = tab.table.columns[start_col..end_col].iter().enumerate().map(|(idx, col)| {
+        let actual_col_idx = start_col + idx;
+        let sort_icon = if tab.table.sort_col == Some(actual_col_idx) {
             if tab.table.sort_desc { " ▼" } else { " ▲" }
         } else {
             ""
         };
         let text = format!("{}{}", col, sort_icon);
-        let style = if tab.table.sort_col == Some(i) {
+        let style = if tab.table.sort_col == Some(actual_col_idx) {
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
@@ -401,39 +496,37 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
     });
     let header_row = Row::new(header_cells).height(1).bottom_margin(1);
 
-    // Prepare rows with zebra styling and selection cursor
-    let rows_count = tab.table.rows.len();
-    let visible_height = inner_area.height.saturating_sub(2) as usize;
     let selected_row = tab.table.selected_row;
-
-    let start_row = if selected_row >= visible_height {
-        selected_row.saturating_sub(visible_height - 1)
-    } else {
-        0
-    };
-
-    let end_row = (start_row + visible_height).min(rows_count);
+    let selected_col = tab.table.selected_col;
 
     let table_rows = tab.table.rows[start_row..end_row]
         .iter()
         .enumerate()
         .map(|(idx, row)| {
-            let actual_idx = start_row + idx;
-            let is_selected = is_focused && actual_idx == selected_row;
+            let actual_row_idx = start_row + idx;
+            let is_row_selected = is_focused && actual_row_idx == selected_row;
 
-            let cells = row.iter().enumerate().map(|(c_idx, val)| {
-                let is_cell_selected = is_selected && c_idx == tab.table.selected_col;
+            let visible_row_cells = if start_col < row.len() {
+                let row_end = end_col.min(row.len());
+                &row[start_col..row_end]
+            } else {
+                &[]
+            };
+
+            let cells = visible_row_cells.iter().enumerate().map(|(c_idx, val)| {
+                let actual_col_idx = start_col + c_idx;
+                let is_cell_selected = is_row_selected && actual_col_idx == selected_col;
                 if is_cell_selected {
                     Span::styled(
                         val.clone(),
                         Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
                     )
-                } else if is_selected {
+                } else if is_row_selected {
                     Span::styled(
                         val.clone(),
                         Style::default().fg(Color::White).bg(Color::Rgb(40, 50, 70)),
                     )
-                } else if actual_idx % 2 == 0 {
+                } else if actual_row_idx % 2 == 0 {
                     Span::styled(
                         val.clone(),
                         Style::default().fg(Color::White).bg(Color::Rgb(20, 20, 25)),
@@ -446,11 +539,10 @@ fn render_table(f: &mut Frame, app: &App, area: Rect) {
             Row::new(cells).height(1)
         });
 
-    // Column constraints
-    let col_count = tab.table.columns.len().max(1);
-    let col_width = (inner_area.width / col_count as u16).max(12);
-    let constraints: Vec<Constraint> = (0..col_count)
-        .map(|_| Constraint::Length(col_width))
+    let rendered_col_count = end_col.saturating_sub(start_col).max(1);
+    let dynamic_col_width = (inner_area.width / rendered_col_count as u16).max(col_width);
+    let constraints: Vec<Constraint> = (0..rendered_col_count)
+        .map(|_| Constraint::Length(dynamic_col_width))
         .collect();
 
     let table_widget = Table::new(table_rows, constraints)

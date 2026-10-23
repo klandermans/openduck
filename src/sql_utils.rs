@@ -33,7 +33,7 @@ pub fn sql_for_file(path: &Path) -> String {
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("table");
-        let mut table_name = stem.replace(' ', "_").replace('-', "_");
+        let mut table_name = stem.replace([' ', '-'], "_");
         // Replace non-alphanumeric/underscore
         table_name = table_name
             .chars()
@@ -82,10 +82,10 @@ pub fn toggle_sql_comment_lines(lines: &[String]) -> Vec<String> {
             let indent_len = l.len() - trimmed.len();
             let indent = &l[..indent_len];
 
-            if trimmed.starts_with("-- ") {
-                result.push(format!("{}{}", indent, &trimmed[3..]));
-            } else if trimmed.starts_with("--") {
-                result.push(format!("{}{}", indent, &trimmed[2..]));
+            if let Some(stripped) = trimmed.strip_prefix("-- ") {
+                result.push(format!("{}{}", indent, stripped));
+            } else if let Some(stripped) = trimmed.strip_prefix("--") {
+                result.push(format!("{}{}", indent, stripped));
             } else {
                 result.push(l.clone());
             }

@@ -83,6 +83,43 @@ impl TableView {
         }
     }
 
+    pub fn visible_slice(
+        &self,
+        visible_height: usize,
+        col_width: u16,
+        total_width: u16,
+    ) -> (usize, usize, usize, usize) {
+        let rows_count = self.rows.len();
+        let cols_count = self.columns.len();
+
+        let visible_cols = total_width
+            .checked_div(col_width)
+            .unwrap_or(1)
+            .max(1) as usize;
+
+        let start_row = if self.selected_row < self.scroll_row {
+            self.selected_row
+        } else if visible_height > 0 && self.selected_row >= self.scroll_row + visible_height {
+            self.selected_row + 1 - visible_height
+        } else {
+            self.scroll_row
+        };
+        let start_row = start_row.min(rows_count);
+        let end_row = (start_row + visible_height).min(rows_count);
+
+        let start_col = if self.selected_col < self.scroll_col {
+            self.selected_col
+        } else if visible_cols > 0 && self.selected_col >= self.scroll_col + visible_cols {
+            self.selected_col + 1 - visible_cols
+        } else {
+            self.scroll_col
+        };
+        let start_col = start_col.min(cols_count);
+        let end_col = (start_col + visible_cols).min(cols_count);
+
+        (start_row, end_row, start_col, end_col)
+    }
+
     pub fn toggle_sort(&mut self, col: usize) {
         if col >= self.columns.len() {
             return;

@@ -160,3 +160,81 @@ fn test_editor_multiline_editing() {
     // After multiple operations undo walks backward
     assert_eq!(editor.lines.len(), 2);
 }
+
+#[test]
+fn test_tab_pristine_and_opening_files() {
+    let mut app = App::new().expect("app init");
+    assert_eq!(app.tabs.len(), 1);
+    assert!(app.current_tab().is_pristine);
+
+    // Opening first file replaces pristine initial tab
+    let ducks_path = PathBuf::from("samples/ducks.csv");
+    app.open_file(&ducks_path);
+    assert_eq!(app.tabs.len(), 1);
+    assert_eq!(app.current_tab().title, "ducks.csv");
+    assert!(!app.current_tab().is_pristine);
+
+    // Opening second file MUST open a brand new tab because current tab is no longer pristine
+    let sales_path = PathBuf::from("samples/sales.csv");
+    app.open_file(&sales_path);
+    assert_eq!(app.tabs.len(), 2);
+    assert_eq!(app.current_tab().title, "sales.csv");
+
+    // Close active tab
+    app.close_active_tab();
+    assert_eq!(app.tabs.len(), 1);
+    assert_eq!(app.current_tab().title, "ducks.csv");
+
+    // Close last remaining tab: should reset to clean pristine tab rather than leaving app in an invalid state
+    app.close_active_tab();
+    assert_eq!(app.tabs.len(), 1);
+    assert_eq!(app.current_tab().title, "Query 1");
+    assert!(app.current_tab().is_pristine);
+}
+
+#[test]
+fn test_table_2d_scrolling_and_visible_slice() {
+    let mut table = TableView::new();
+    let cols: Vec<String> = (0..30).map(|i| format!("col_{}", i)).collect();
+    let rows: Vec<Vec<String>> = (0..50)
+        .map(|r| (0..30).map(|c| format!("val_{}_{}", r, c)).collect())
+        .collect();
+    table.set_data(cols, rows);
+
+    // Initial slice at top-left
+    let (start_row, end_row, start_col, end_col) = table.visible_slice(10, 16, 80);
+    assert_eq!(start_row, 0);
+    assert_eq!(end_row, 10);
+    assert_eq!(start_col, 0);
+    assert_eq!(end_col, 5); // 80 / 16 = 5 visible cols
+
+    // Move right past visible columns: column 8
+    table.selected_col = 8;
+    table.scroll_col = start_col;
+    let (_, _, s_col, e_col) = table.visible_slice(10, 16, 80);
+    assert!(s_col <= 8 && 8 < e_col, "Selected col 8 must be within visible slice [{}, {})", s_col, e_col);
+
+    // Move down past visible rows: row 25
+    table.selected_row = 25;
+    table.scroll_row = start_row;
+    let (s_row, e_row, _, _) = table.visible_slice(10, 16, 80);
+    assert!(s_row <= 25 && 25 < e_row, "Selected row 25 must be within visible slice [{}, {})", s_row, e_row);
+}
+
+#[test]
+fn test_mouse_toggle_and_scrolling() {
+    let mut app = App::new().expect("app init");
+    assert!(app.mouse_enabled);
+
+    // Toggle mouse off via shortcut Ctrl+M
+    let ctrl_m = KeyEvent::new(KeyCode::Char('m'), KeyModifiers::CONTROL);
+    app.handle_key(ctrl_m).unwrap();
+    assert!(!app.mouse_enabled);
+    assert!(app.status_message.contains("disabled"));
+
+    // Toggle mouse back on
+    app.handle_key(ctrl_m).unwrap();
+    assert!(app.mouse_enabled);
+    assert!(app.status_message.contains("enabled"));
+}
+

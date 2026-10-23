@@ -40,6 +40,7 @@ pub struct TabState {
     pub duration_ms: u128,
     pub status_text: String,
     pub error: Option<String>,
+    pub is_pristine: bool,
 }
 
 pub struct App {
@@ -49,12 +50,15 @@ pub struct App {
     pub sidebar_section: SidebarSection,
     pub file_tree: FileTree,
     pub saved_queries_index: usize,
+    pub saved_queries_scroll: usize,
     pub history_index: usize,
+    pub history_scroll: usize,
     pub config: Config,
     pub db: DbEngine,
     pub modal: Modal,
     pub status_message: String,
     pub should_quit: bool,
+    pub mouse_enabled: bool,
 }
 
 impl App {
@@ -74,6 +78,7 @@ impl App {
             duration_ms: 0,
             status_text: "Ready".to_string(),
             error: None,
+            is_pristine: true,
         };
 
         let mut app = Self {
@@ -83,12 +88,15 @@ impl App {
             sidebar_section: SidebarSection::Files,
             file_tree,
             saved_queries_index: 0,
+            saved_queries_scroll: 0,
             history_index: 0,
+            history_scroll: 0,
             config,
             db,
             modal: Modal::None,
             status_message: "Ready. Press Ctrl+Enter to run query, F2 for help.".to_string(),
             should_quit: false,
+            mouse_enabled: true,
         };
 
         // Run initial query on the first tab to populate welcome data
@@ -121,6 +129,7 @@ impl App {
             duration_ms: 0,
             status_text: "Ready".to_string(),
             error: None,
+            is_pristine: true,
         });
         self.active_tab = self.tabs.len() - 1;
         self.focus = Focus::Editor;
@@ -132,6 +141,15 @@ impl App {
             if self.active_tab >= self.tabs.len() {
                 self.active_tab = self.tabs.len() - 1;
             }
+        } else {
+            let tab = self.current_tab_mut();
+            tab.title = "Query 1".to_string();
+            tab.editor = Editor::new("");
+            tab.table = TableView::new();
+            tab.duration_ms = 0;
+            tab.status_text = "Ready".to_string();
+            tab.error = None;
+            tab.is_pristine = true;
         }
     }
 
@@ -190,17 +208,97 @@ impl App {
             .and_then(|n| n.to_str())
             .unwrap_or("Query");
 
-        // If current tab is empty, use it. Otherwise, create a new tab.
-        if self.current_tab().editor.get_text().trim().is_empty()
-            || self.current_tab().editor.get_text().contains("SELECT 42")
-        {
+        let is_empty_or_pristine = self.current_tab().is_pristine
+            || self.current_tab().editor.get_text().trim().is_empty();
+
+        if is_empty_or_pristine {
             let tab = self.current_tab_mut();
             tab.title = name.to_string();
             tab.editor.set_text(&sql);
+            tab.is_pristine = false;
         } else {
             self.new_tab(Some(name), Some(&sql));
+            self.current_tab_mut().is_pristine = false;
         }
         self.run_query();
+    }
+
+    pub fn toggle_mouse(&mut self) {
+        self.mouse_enabled = !self.mouse_enabled;
+        if self.mouse_enabled {
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
+            self.status_message = "Mouse mode enabled".to_string();
+        } else {
+            let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+            self.status_message = "Mouse mode disabled (text copy enabled)".to_string();
+        }
+    }
+
+    pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) -> Result<()> {
+        if !self.mouse_enabled {
+            return Ok(());
+        }
+        use crossterm::event::MouseEventKind;
+        match mouse.kind {
+            MouseEventKind::ScrollUp => match self.focus {
+                Focus::Sidebar => match self.sidebar_section {
+                    SidebarSection::Files => self.file_tree.move_up(),
+                    SidebarSection::SavedQueries => {
+                        if self.saved_queries_index > 0 {
+                            self.saved_queries_index -= 1;
+                        }
+                    }
+                    SidebarSection::History => {
+                        if self.history_index > 0 {
+                            self.history_index -= 1;
+                        }
+                    }
+                },
+                Focus::Editor => self.current_tab_mut().editor.move_up(),
+                Focus::Table => self.current_tab_mut().table.move_up(),
+            },
+            MouseEventKind::ScrollDown => match self.focus {
+                Focus::Sidebar => match self.sidebar_section {
+                    SidebarSection::Files => self.file_tree.move_down(),
+                    SidebarSection::SavedQueries => {
+                        if !self.config.saved_queries.is_empty()
+                            && self.saved_queries_index + 1 < self.config.saved_queries.len()
+                        {
+                            self.saved_queries_index += 1;
+                        }
+                    }
+                    SidebarSection::History => {
+                        if !self.config.history.is_empty()
+                            && self.history_index + 1 < self.config.history.len()
+                        {
+                            self.history_index += 1;
+                        }
+                    }
+                },
+                Focus::Editor => self.current_tab_mut().editor.move_down(),
+                Focus::Table => self.current_tab_mut().table.move_down(),
+            },
+            MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                if mouse.column < 32 {
+                    self.focus = Focus::Sidebar;
+                    if mouse.row < 14 {
+                        self.sidebar_section = SidebarSection::Files;
+                    } else if mouse.row < 22 {
+                        self.sidebar_section = SidebarSection::SavedQueries;
+                    } else {
+                        self.sidebar_section = SidebarSection::History;
+                    }
+                } else if mouse.row <= 3 {
+                    self.next_tab();
+                } else if mouse.row < 14 {
+                    self.focus = Focus::Editor;
+                } else {
+                    self.focus = Focus::Table;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -229,6 +327,10 @@ impl App {
                 }
                 KeyCode::Char('w') => {
                     self.close_active_tab();
+                    return Ok(());
+                }
+                KeyCode::Char('m') => {
+                    self.toggle_mouse();
                     return Ok(());
                 }
                 KeyCode::Char('e') => {
@@ -414,10 +516,22 @@ impl App {
                     editor.move_down();
                 }
             }
-            KeyCode::Backspace => editor.backspace(),
-            KeyCode::Delete => editor.delete(),
-            KeyCode::Enter => editor.insert_newline(),
-            KeyCode::Char(c) => editor.insert_char(c),
+            KeyCode::Backspace => {
+                editor.backspace();
+                self.current_tab_mut().is_pristine = false;
+            }
+            KeyCode::Delete => {
+                editor.delete();
+                self.current_tab_mut().is_pristine = false;
+            }
+            KeyCode::Enter => {
+                editor.insert_newline();
+                self.current_tab_mut().is_pristine = false;
+            }
+            KeyCode::Char(c) => {
+                editor.insert_char(c);
+                self.current_tab_mut().is_pristine = false;
+            }
             _ => {}
         }
     }
@@ -443,18 +557,14 @@ impl App {
                     self.status_message = format!("📋 Copied cell: '{}'", text);
                 }
             }
-            KeyCode::Char('r') => {
-                if let Ok(_) = table.copy_current_row() {
-                    self.status_message = "📋 Copied row to clipboard".to_string();
-                }
+            KeyCode::Char('r') if table.copy_current_row().is_ok() => {
+                self.status_message = "📋 Copied row to clipboard".to_string();
             }
-            KeyCode::Char('a') => {
-                if let Ok(_) = table.copy_entire_table() {
-                    self.status_message = format!(
-                        "📋 Copied full table ({} rows) to clipboard",
-                        table.row_count()
-                    );
-                }
+            KeyCode::Char('a') if table.copy_entire_table().is_ok() => {
+                self.status_message = format!(
+                    "📋 Copied full table ({} rows) to clipboard",
+                    table.row_count()
+                );
             }
             _ => {}
         }
