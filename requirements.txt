@@ -5,4 +5,7 @@ pandas
 openpyxl
 xlrd
 pymssql
+plotly>=5.0.0
+kaleido>=1.0.0
+pillow>=10.0.0
 plotext>=5.2.8

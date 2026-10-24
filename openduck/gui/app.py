@@ -753,6 +753,7 @@ class DuckCLI(App):
             tab.full_data = data
             tab.col_states = {i: {"filter": "", "sort": None} for i in range(len(cols))}
             logger.debug(f"Setting up table with {len(cols)} columns and {len(data)} rows")
+            tab.show_table()
             self.refresh_tab_table(tab)
             conn_label = ""
             if conn_meta:
@@ -1173,20 +1174,20 @@ class DuckCLI(App):
                 self.load_query_in_current_tab(sql)
 
     def action_plot(self) -> None:
-        """Open plot dialog for current tab."""
+        """Toggle between data table and in-tab plot view for current tab."""
         tabs = self.query_one("#tabs", TabbedContent)
         if not tabs.active:
             return
 
         tab = self.query_one(f"#{tabs.active}").query_one(QueryTab)
-        if not tab.full_data or not tab.column_names:
+        if not tab.is_plot_active() and (not tab.full_data or not tab.column_names):
             meta = tab.query_one("#metadata-bar") if tab else None
             if meta:
                 meta.update("No data to plot")
             self.notify("No data to plot. Run a query first.", severity="warning")
             return
 
-        self.push_screen(PlotDialog(tab))
+        tab.toggle_plot()
 
     def on_button_pressed(self, event: Button.Pressed):
         """Handle button presses."""

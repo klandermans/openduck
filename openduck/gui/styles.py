@@ -13,6 +13,16 @@ HeaderTitle { text-align: center; }
 TabbedContent { width: 100%; height: 1fr; }
 SqlTextArea, TextArea { height: 35%; border-bottom: tall $primary; }
 ResultsTable, DataTable { height: 1fr; }
+#tab-results-container { height: 1fr; width: 1fr; }
+#results-switcher { height: 1fr; width: 1fr; }
+PlotView, #plot-view { height: 1fr; width: 1fr; background: $panel; }
+#plot-toolbar { height: auto; background: $surface; padding: 0 1; border-bottom: solid $primary; }
+.plot-toolbar-row { height: auto; margin-bottom: 0; align-vertical: middle; }
+.plot-field { width: 1fr; margin: 0 1; height: auto; }
+.plot-field-label { text-style: bold; color: $accent; height: 1; }
+.plot-field-input { width: 1fr; margin: 0 1; }
+.plot-btn { min-width: 10; margin: 0 1; height: 3; }
+#plot-view #plot-output-container { border: none; }
 #export-sidebar { width: 14; margin-left: 1; background: $panel; border: round $primary; padding: 0; overflow-y: auto; }
 .export-btn { margin: 0; padding: 0; height: 3; width: 100%; }
 #metadata-container {

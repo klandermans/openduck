@@ -1,15 +1,19 @@
 """Query tab container combining editor, results table, action buttons, and status bar."""
 
+import logging
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, DataTable, Static
+from textual.widgets import Button, ContentSwitcher, DataTable, Static
 
+from openduck.gui.widgets.plot_view import PlotView
 from openduck.gui.widgets.results_table import ResultsTable
 from openduck.gui.widgets.sql_editor import SqlTextArea
 
+logger = logging.getLogger(__name__)
+
 
 class QueryTab(Vertical):
-    """A tab containing a SQL text editor, results table, action toolbar, and metadata bar."""
+    """A tab containing a SQL text editor, results table / plot view, action toolbar, and metadata bar."""
 
     def __init__(self, sql: str = "", connection_id: str = None):
         super().__init__()
@@ -35,11 +39,13 @@ class QueryTab(Vertical):
         except Exception:
             pass
         yield text_area
-        with Horizontal():  # Container for table and export sidebar
-            yield ResultsTable(id="results-table")
+        with Horizontal(id="tab-results-container"):  # Container for table/plot and export sidebar
+            with ContentSwitcher(initial="results-table", id="results-switcher"):
+                yield ResultsTable(id="results-table")
+                yield PlotView(self, id="plot-view")
             with Vertical(id="export-sidebar"):
                 yield Button("▶ Run", id="btn-run-query", classes="export-btn", variant="primary", tooltip="Run query / selection (Ctrl+Enter)")
-                yield Button("📊 Plot", id="btn-plot", classes="export-btn", tooltip="Plot results with plotext")
+                yield Button("📊 Plot", id="btn-plot", classes="export-btn", tooltip="Plot results with Plotly")
                 yield Button("💬 --", id="btn-comment", classes="export-btn", tooltip="Toggle comment (F3 / Cmd+/)")
                 yield Button("↓CSV", id="export-csv", classes="export-btn")
                 yield Button("↓XLSX", id="export-excel", classes="export-btn")
@@ -47,6 +53,45 @@ class QueryTab(Vertical):
         with Horizontal(id="metadata-container"):
             yield Static("Ready", id="metadata-bar")
             yield Static("Memory: N/A", id="memory-bar")
+
+    def is_plot_active(self) -> bool:
+        """Check if plot view is currently shown instead of results table."""
+        try:
+            switcher = self.query_one("#results-switcher", ContentSwitcher)
+            return switcher.current == "plot-view"
+        except Exception:
+            return False
+
+    def show_plot(self) -> None:
+        """Switch from results table to in-tab plot view."""
+        try:
+            switcher = self.query_one("#results-switcher", ContentSwitcher)
+            switcher.current = "plot-view"
+            plot_view = self.query_one("#plot-view", PlotView)
+            plot_view.refresh_and_render()
+            btn_plot = self.query_one("#btn-plot", Button)
+            btn_plot.label = "📋 Table"
+            btn_plot.tooltip = "Show data table"
+        except Exception as e:
+            logger.error(f"Error showing plot view: {e}")
+
+    def show_table(self) -> None:
+        """Switch from in-tab plot view to results table."""
+        try:
+            switcher = self.query_one("#results-switcher", ContentSwitcher)
+            switcher.current = "results-table"
+            btn_plot = self.query_one("#btn-plot", Button)
+            btn_plot.label = "📊 Plot"
+            btn_plot.tooltip = "Plot results with Plotly"
+        except Exception as e:
+            logger.error(f"Error showing table view: {e}")
+
+    def toggle_plot(self) -> None:
+        """Toggle between results table and plot view."""
+        if self.is_plot_active():
+            self.show_table()
+        else:
+            self.show_plot()
 
     def on_mount(self):
         t = self.query_one(DataTable)

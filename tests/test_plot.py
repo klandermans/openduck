@@ -1,23 +1,30 @@
-"""Tests for plotext integration, plot detector heuristics, and PlotDialog UI."""
+"""Tests for Plotly and Rich integration, plot detector heuristics, and PlotDialog UI."""
 
 import asyncio
 import datetime
 import decimal
+import os
 import unittest
 from unittest.mock import patch
 
+from rich.console import Console
+from rich.style import Style
+from rich.text import Text
 from textual.widgets import Button, Input, Select, Static
 
 from openduck.core.plot_detector import (
     AVAILABLE_CHART_TYPES,
     ColumnProfile,
     PlotSuggestion,
+    create_plotly_figure,
     detect_best_plot,
     detect_column_types,
     is_numeric_value,
     is_temporal_value,
     recommend_plots,
+    render_plot_rich,
     render_plotext,
+    render_plotly,
 )
 from openduck.gui.app import DuckCLI
 from openduck.gui.dialogs.plot_dialog import PlotDialog
@@ -361,8 +368,11 @@ class TestPlotDialog(unittest.IsolatedAsyncioTestCase):
             dialog.dismiss()
             await pilot.pause()
 
-    async def test_plot_button_in_query_tab_opens_dialog(self):
-        """Clicking 📊 Plot button in QueryTab toolbar opens PlotDialog."""
+    async def test_plot_button_in_query_tab_toggles_plot_view(self):
+        """Clicking 📊 Plot button in QueryTab toggles in-tab plot view in place of results table."""
+        from textual.widgets import ContentSwitcher
+        from openduck.gui.widgets.plot_view import PlotView
+
         app = DuckCLI()
         async with app.run_test() as pilot:
             await asyncio.sleep(0.3)
@@ -376,13 +386,18 @@ class TestPlotDialog(unittest.IsolatedAsyncioTestCase):
             btn_plot = tab.query_one("#btn-plot", Button)
             self.assertIn("Plot", str(btn_plot.label))
             self.assertIn("export-btn", btn_plot.classes)
-            self.assertEqual(btn_plot.tooltip, "Plot results with plotext")
+            self.assertEqual(btn_plot.tooltip, "Plot results with Plotly")
 
-            # With no data, pressing shows notification and does not open dialog
+            switcher = tab.query_one("#results-switcher", ContentSwitcher)
+            self.assertEqual(switcher.current, "results-table")
+            self.assertFalse(tab.is_plot_active())
+
+            # With no data, pressing shows notification and does not toggle
             btn_plot.press()
             await pilot.pause()
             meta = tab.query_one("#metadata-bar", Static)
             self.assertEqual(str(meta._render()), "No data to plot")
+            self.assertEqual(switcher.current, "results-table")
 
             # Now populate data and press again
             tab.column_names = ["x", "y"]
@@ -391,10 +406,116 @@ class TestPlotDialog(unittest.IsolatedAsyncioTestCase):
             btn_plot.press()
             await pilot.pause()
 
-            # PlotDialog should now be active screen
-            self.assertIsInstance(app.screen, PlotDialog)
-            app.screen.dismiss()
+            # Plot view should now be active in place of results table
+            self.assertTrue(tab.is_plot_active())
+            self.assertEqual(switcher.current, "plot-view")
+            self.assertIn("Table", str(btn_plot.label))
+            self.assertEqual(btn_plot.tooltip, "Show data table")
+
+            # Verify plot view rendered
+            plot_view = tab.query_one("#plot-view", PlotView)
+            plot_out = plot_view.query_one("#plot-output", Static)
+            self.assertTrue(len(str(plot_out._render())) > 0)
+
+            # Pressing again toggles back to table view
+            btn_plot.press()
             await pilot.pause()
+
+            self.assertFalse(tab.is_plot_active())
+            self.assertEqual(switcher.current, "results-table")
+            self.assertIn("Plot", str(btn_plot.label))
+            self.assertEqual(btn_plot.tooltip, "Plot results with Plotly")
+
+            # Switching back to plot and pressing the in-plot "📋 Table" button
+            tab.show_plot()
+            await pilot.pause()
+            self.assertTrue(tab.is_plot_active())
+
+            btn_table = plot_view.query_one("#btn-show-table", Button)
+            btn_table.press()
+            await pilot.pause()
+            self.assertFalse(tab.is_plot_active())
+            self.assertEqual(switcher.current, "results-table")
+
+
+class TestPlotlyAndRich(unittest.TestCase):
+    """Unit tests for Plotly figure creation, HTML output, and Rich console formatting."""
+
+    def test_create_plotly_bar(self):
+        """create_plotly_figure generates a valid plotly figure for bar chart."""
+        cols = ["product", "revenue"]
+        data = [("Widget", 100), ("Gadget", 250)]
+        fig = create_plotly_figure(cols, data, chart_type="bar", x_col="product", y_col="revenue", title="Sales")
+        self.assertEqual(len(fig.data), 1)
+        self.assertEqual(fig.data[0].type, "bar")
+        self.assertEqual(fig.layout.title.text, "Sales")
+
+    def test_create_plotly_line_and_scatter(self):
+        """create_plotly_figure handles line and scatter charts."""
+        cols = ["time", "val"]
+        data = [(1, 10), (2, 20), (3, 15)]
+        fig_line = create_plotly_figure(cols, data, chart_type="line", x_col="time", y_col="val")
+        self.assertEqual(fig_line.data[0].type, "scatter")
+        self.assertEqual(fig_line.data[0].mode, "lines+markers")
+
+        fig_scatter = create_plotly_figure(cols, data, chart_type="scatter", x_col="time", y_col="val")
+        self.assertEqual(fig_scatter.data[0].type, "scatter")
+        self.assertEqual(fig_scatter.data[0].mode, "markers")
+
+    def test_create_plotly_hist_and_count(self):
+        """create_plotly_figure handles histogram and count charts."""
+        cols = ["category"]
+        data = [("A",), ("B",), ("A",), ("C",)]
+        fig_count = create_plotly_figure(cols, data, chart_type="count", x_col="category")
+        self.assertEqual(fig_count.data[0].type, "bar")
+
+        num_cols = ["score"]
+        num_data = [(85,), (90,), (78,), (92,)]
+        fig_hist = create_plotly_figure(num_cols, num_data, chart_type="hist", x_col="score")
+        self.assertEqual(fig_hist.data[0].type, "histogram")
+
+    def test_render_plotly_terminal_image(self):
+        """render_plotly renders terminal image as Rich Text with braille and half blocks."""
+        cols = ["month", "sales"]
+        data = [("Jan", 50), ("Feb", 80)]
+        out_braille = render_plotly(cols, data, chart_type="bar", x_col="month", y_col="sales", title="Monthly Sales", mode="braille")
+        self.assertIsInstance(out_braille, Text)
+        self.assertIn("Monthly Sales", out_braille.plain)
+        has_braille = any(0x2800 <= ord(ch) <= 0x28FF for ch in out_braille.plain)
+        self.assertTrue(has_braille)
+
+        out_half = render_plotly(cols, data, chart_type="bar", x_col="month", y_col="sales", title="Monthly Sales", mode="halfblock")
+        self.assertIsInstance(out_half, Text)
+        self.assertIn("▀", out_half.plain)
+
+    def test_render_plotly_vector_mode(self):
+        """render_plotly vector mode produces ultra-sharp native text axes and blocks."""
+        cols = ["month", "sales"]
+        data = [("Jan", 50), ("Feb", 80)]
+        out_vec = render_plotly(cols, data, chart_type="bar", x_col="month", y_col="sales", title="Monthly Sales", mode="vector")
+        self.assertIsInstance(out_vec, Text)
+        self.assertIn("Monthly Sales", out_vec.plain)
+        self.assertIn("Jan", out_vec.plain)
+        self.assertIn("Feb", out_vec.plain)
+        self.assertIn("┤", out_vec.plain)
+
+    def test_render_plot_rich_returns_rich_text(self):
+        """render_plot_rich produces a styled rich.text.Text object."""
+        cols = ["department", "headcount"]
+        data = [("Engineering", 42), ("Sales", 28), ("HR", 10)]
+        rich_text = render_plot_rich(cols, data, chart_type="bar", x_col="department", y_col="headcount", title="Company Staff")
+        self.assertIsInstance(rich_text, Text)
+        plain = rich_text.plain
+        self.assertIn("PLOTLY", plain)
+        self.assertIn("Company Staff", plain)
+        self.assertIn("Engineering", plain)
+
+        # Test printing via rich.console.Console
+        console = Console(record=True, width=80)
+        console.print(rich_text)
+        exported = console.export_text()
+        self.assertIn("PLOTLY", exported)
+
 
 
 if __name__ == "__main__":
