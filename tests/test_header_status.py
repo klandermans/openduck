@@ -340,12 +340,9 @@ class TestHeaderStatusAsync(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.3)
             await pilot.pause()
 
-            # Ensure Header is present in window and centered
+            # Ensure Header is absent from window
             headers = list(app.query(Header))
-            self.assertEqual(len(headers), 1)
-            title_widget = headers[0].query_one("HeaderTitle")
-            self.assertEqual(title_widget.styles.text_align, "center")
-            self.assertEqual(title_widget._render().plain, "OpenDuck •\ndone")
+            self.assertEqual(len(headers), 0)
 
             # Initially done
             self.assertEqual(app.sub_title, "done")

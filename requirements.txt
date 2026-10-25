@@ -1,5 +1,5 @@
 textual[syntax]
-duckdb
+duckdb>=2.0.0
 pyinstaller
 pandas
 openpyxl

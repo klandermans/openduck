@@ -88,7 +88,6 @@ class DuckCLI(App):
         self._tab_counter: int = 0
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=False)
         with Horizontal():
             with Vertical(id="sidebar"):
                 yield DuckTree(CWD, id="files")

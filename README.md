@@ -13,13 +13,6 @@
 
 ---
 
-> 🦀 **Rust + Ratatui Edition (`rust-ratatui` branch)**:
-> This branch provides a high-performance native Rust version of OpenDuck built with [Ratatui](https://ratatui.rs) and DuckDB.
-> - **Run**: `cargo run`
-> - **Test**: `cargo test`
-
----
-
 ## ✨ Features
 
 - ⚡ **Instant File Queries**: Click or select any file (`.csv`, `.parquet`, `.xlsx`, `.json`, `.duckdb`, `.sqlite`, `.arrow`) from the sidebar to instantly load and execute queries with zero boilerplates.
