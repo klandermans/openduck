@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openduck-cli"
-version = "0.2.0"
+version = "0.2.1"
 description = "A flat file SQL client based on DuckDB"
 readme = "README.md"
 authors = [{ name = "Bertatron" }]

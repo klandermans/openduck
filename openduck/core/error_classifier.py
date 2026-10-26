@@ -43,6 +43,8 @@ def classify_file_error(e: Exception, file_path: str = "") -> str:
         return f"❌ File not found: {file_path}\n→ The file does not exist at this location"
     elif 'permission' in error_msg:
         return f"❌ Permission denied: {file_path}\n→ You don't have permission to access this file"
+    elif 'too many open files' in error_msg or 'errno 24' in error_msg:
+        return f"❌ Too many open files\n→ System file descriptor limit reached"
     elif 'disk i/o' in error_msg or 'io error' in error_msg:
         return f"❌ Disk I/O error\n→ There may be a problem with the disk or file system"
     elif 'out of memory' in error_msg:

@@ -548,11 +548,17 @@ class DuckCLI(App):
                 login_timeout=10,
             )
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
-                "WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME"
-            )
-            tables = [row[0] for row in cursor.fetchall()]
+            try:
+                cursor.execute(
+                    "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+                    "WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME"
+                )
+                tables = [row[0] for row in cursor.fetchall()]
+            finally:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
             return conn, tables
 
         conn, tables = await asyncio.to_thread(do_connect)
@@ -719,30 +725,42 @@ class DuckCLI(App):
             if conn_meta and conn_meta["type"] == "mssql":
                 mssql_conn = conn_meta["connection"]
                 cursor = mssql_conn.cursor()
-                cursor.execute(sql)
-                if not cursor.description:
-                    logger.debug("Query returned no results (MS SQL)")
-                    return [], ["Info"], None, time.perf_counter() - start, False
-                cols = [d[0] for d in cursor.description]
-                raw_data = cursor.fetchmany(MAX_UI_ROWS + 1)
-                is_truncated = len(raw_data) > MAX_UI_ROWS
-                data = [list(r) for r in raw_data[:MAX_UI_ROWS]]
-                logger.debug(f"MS SQL query executed: {len(data)} rows (truncated={is_truncated}), {len(cols)} columns")
-                return data, cols, None, time.perf_counter() - start, is_truncated
+                try:
+                    cursor.execute(sql)
+                    if not cursor.description:
+                        logger.debug("Query returned no results (MS SQL)")
+                        return [], ["Info"], None, time.perf_counter() - start, False
+                    cols = [d[0] for d in cursor.description]
+                    raw_data = cursor.fetchmany(MAX_UI_ROWS + 1)
+                    is_truncated = len(raw_data) > MAX_UI_ROWS
+                    data = [list(r) for r in raw_data[:MAX_UI_ROWS]]
+                    logger.debug(f"MS SQL query executed: {len(data)} rows (truncated={is_truncated}), {len(cols)} columns")
+                    return data, cols, None, time.perf_counter() - start, is_truncated
+                finally:
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
             else:
                 cursor = self.con.cursor()
-                res = cursor.execute(sql)
-                if not res.description:
+                try:
+                    res = cursor.execute(sql)
+                    if not res.description:
+                        duration = time.perf_counter() - start
+                        logger.debug("Query returned no results (DuckDB)")
+                        return [], ["Info"], [["Success"]], duration, False
+                    cols = [d[0] for d in res.description]
+                    raw_data = res.fetchmany(MAX_UI_ROWS + 1)
+                    is_truncated = len(raw_data) > MAX_UI_ROWS
+                    data = [list(r) for r in raw_data[:MAX_UI_ROWS]]
                     duration = time.perf_counter() - start
-                    logger.debug("Query returned no results (DuckDB)")
-                    return [], ["Info"], [["Success"]], duration, False
-                cols = [d[0] for d in res.description]
-                raw_data = res.fetchmany(MAX_UI_ROWS + 1)
-                is_truncated = len(raw_data) > MAX_UI_ROWS
-                data = [list(r) for r in raw_data[:MAX_UI_ROWS]]
-                duration = time.perf_counter() - start
-                logger.debug(f"DuckDB query executed: {len(data)} rows (truncated={is_truncated}), {len(cols)} columns")
-                return data, cols, None, duration, is_truncated
+                    logger.debug(f"DuckDB query executed: {len(data)} rows (truncated={is_truncated}), {len(cols)} columns")
+                    return data, cols, None, duration, is_truncated
+                finally:
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
 
         try:
             data, cols, _, duration, is_truncated = await asyncio.to_thread(execute)
