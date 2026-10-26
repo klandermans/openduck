@@ -199,5 +199,16 @@ openduck/
 
 ## 📜 License
 
+
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-F6SG49ZW15"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-F6SG49ZW15');
+</script>
+
 Distributed under the **MIT License**. See `LICENSE` for details.
 
